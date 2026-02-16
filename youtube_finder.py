@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.2
+YouTube Channel Finder v3.4
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Parse channel (long / shorts classification)
   Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
@@ -13,6 +13,7 @@ import re
 import json
 import subprocess
 import urllib.request
+import msvcrt
 from datetime import datetime, timedelta
 
 try:
@@ -205,33 +206,56 @@ def ask_filters() -> dict:
 
     lang = input("  Language code (ru/en/uk/ja/ar/...) []: ").strip() or None
 
-    mr = input("  Max results [25]: ").strip()
+    ps = input("  Results per page (how many to show at a time) [25]: ").strip()
     try:
-        max_results = min(max(int(mr), 1), 50)
+        page_size = min(max(int(ps), 1), 50)
     except ValueError:
-        max_results = 25
+        page_size = 25
 
     return dict(duration=duration, definition=definition,
-                published_after=pub_after, language=lang, max_results=max_results)
+                published_after=pub_after, language=lang, page_size=page_size)
 
 
-def search_youtube(km: KeyManager, query: str, filters: dict) -> list:
-    """Run a YouTube search with optional filters."""
-    def req(yt):
-        params = dict(part="snippet", maxResults=filters['max_results'],
-                      q=query, type="video")
-        if filters['duration'] != 'any':
-            params['videoDuration'] = filters['duration']
-        if filters['definition'] != 'any':
-            params['videoDefinition'] = filters['definition']
-        if filters['published_after']:
-            params['publishedAfter'] = filters['published_after']
-        if filters['language']:
-            params['relevanceLanguage'] = filters['language']
-        return yt.search().list(**params)
+def search_youtube_all(km: KeyManager, query: str, filters: dict) -> list:
+    """Fetch ALL YouTube search results using nextPageToken pagination."""
+    all_items = []
+    page_token = None
+    total_reported = None
 
-    resp = api_call(km, req)
-    return resp.get('items', []) if resp else []
+    while True:
+        def req(yt, pt=page_token):
+            params = dict(part="snippet", maxResults=50,
+                          q=query, type="video")
+            if filters['duration'] != 'any':
+                params['videoDuration'] = filters['duration']
+            if filters['definition'] != 'any':
+                params['videoDefinition'] = filters['definition']
+            if filters['published_after']:
+                params['publishedAfter'] = filters['published_after']
+            if filters['language']:
+                params['relevanceLanguage'] = filters['language']
+            if pt:
+                params['pageToken'] = pt
+            return yt.search().list(**params)
+
+        resp = api_call(km, req)
+        if not resp:
+            break
+
+        if total_reported is None:
+            total_reported = resp.get('pageInfo', {}).get('totalResults', '?')
+            print(f"  {C.CN}API reports ~{total_reported} total result(s){C.E}")
+
+        items = resp.get('items', [])
+        all_items.extend(items)
+
+        page_token = resp.get('nextPageToken')
+        if not page_token:
+            break
+
+        print(f"  ... fetched {len(all_items)} so far")
+
+    return all_items
 
 
 def get_channel_stats(km: KeyManager, channel_ids: list) -> dict:
@@ -254,25 +278,65 @@ def get_channel_stats(km: KeyManager, channel_ids: list) -> dict:
     return out
 
 
-def display_results(results: list, ch_stats: dict):
-    """Pretty-print search results with channel stats."""
+def _print_result_item(i: int, it: dict, ch_stats: dict):
+    """Print a single search result item."""
+    vid = it['id'].get('videoId')
+    if not vid:
+        return
+    sn = it['snippet']
+    cid = sn.get('channelId', '')
+    print(f"  {C.BO}{i}.{C.E} {C.CN}{sn['title']}{C.E}")
+    print(f"     {C.B}https://www.youtube.com/watch?v={vid}{C.E}")
+    print(f"     Channel: {sn.get('channelTitle', '?')}  |  {sn.get('publishedAt', '')[:10]}")
+    cs = ch_stats.get(cid)
+    if cs:
+        print(f"     {C.Y}Subs: {cs['subs']}  Videos: {cs['vids']}  Views: {cs['views']}{C.E}")
+    print()
+
+
+def display_results_paginated(results: list, ch_stats: dict, page_size: int = 25):
+    """Display search results with paginated output.
+    Space = next page, Escape = stop and return to actions menu."""
     if not results:
         print(f"{C.Y}No results found.{C.E}")
         return
-    print(f"\n{C.G}{C.BO}Found {len(results)} video(s):{C.E}\n")
-    for i, it in enumerate(results, 1):
-        vid = it['id'].get('videoId')
-        if not vid:
-            continue
-        sn = it['snippet']
-        cid = sn.get('channelId', '')
-        print(f"  {C.BO}{i}.{C.E} {C.CN}{sn['title']}{C.E}")
-        print(f"     {C.B}https://www.youtube.com/watch?v={vid}{C.E}")
-        print(f"     Channel: {sn.get('channelTitle', '?')}  |  {sn.get('publishedAt', '')[:10]}")
-        cs = ch_stats.get(cid)
-        if cs:
-            print(f"     {C.Y}Subs: {cs['subs']}  Videos: {cs['vids']}  Views: {cs['views']}{C.E}")
-        print()
+
+    total = len(results)
+    total_pages = (total + page_size - 1) // page_size
+    current_page = 0
+
+    print(f"\n{C.G}{C.BO}Found {total} video(s).{C.E}")
+    print(f"{C.CN}Showing {page_size} per page ({total_pages} page(s) total).{C.E}")
+    print(f"{C.Y}[Space]{C.E} = next page  |  {C.Y}[Escape]{C.E} = stop and go to actions menu\n")
+
+    while current_page < total_pages:
+        start = current_page * page_size
+        end = min(start + page_size, total)
+
+        for i in range(start, end):
+            _print_result_item(i + 1, results[i], ch_stats)
+
+        current_page += 1
+
+        if current_page < total_pages:
+            shown = end
+            remaining = total - shown
+            print(f"{C.BO}── Shown {shown}/{total}  │  Remaining: {remaining}  │  "
+                  f"Page {current_page}/{total_pages} ──{C.E}")
+            print(f"{C.Y}[Space]{C.E} = show next {min(page_size, remaining)}  |  "
+                  f"{C.Y}[Escape]{C.E} = stop\n")
+
+            # Wait for keypress
+            while True:
+                key = msvcrt.getch()
+                if key == b' ':     # Space
+                    break
+                elif key == b'\x1b':  # Escape
+                    print(f"\n{C.CN}Stopped. Shown {shown} of {total} results.{C.E}")
+                    return
+                # ignore other keys
+        else:
+            print(f"{C.G}{C.BO}── All {total} result(s) displayed ──{C.E}")
 
 
 def download_thumbnails_search(results: list):
@@ -300,7 +364,8 @@ def download_thumbnails_search(results: list):
 
 
 def save_results(results: list, query: str):
-    """Append search results to find.txt."""
+    """Append ALL search results to find.txt — URLs only, one per line."""
+    count = 0
     try:
         with open(OUTPUT_FILE, 'a', encoding='utf-8') as f:
             f.write(f"\n--- [{datetime.now().strftime('%Y-%m-%d %H:%M')}] {query} ---\n")
@@ -308,7 +373,8 @@ def save_results(results: list, query: str):
                 vid = it['id'].get('videoId')
                 if vid:
                     f.write(f"https://www.youtube.com/watch?v={vid}\n")
-        print(f"{C.G}Saved → {OUTPUT_FILE}{C.E}")
+                    count += 1
+        print(f"{C.G}Saved {count} link(s) → {OUTPUT_FILE}{C.E}")
     except Exception as e:
         print(f"{C.R}Save error: {e}{C.E}")
 
@@ -526,25 +592,32 @@ def download_selected(results: list):
     _download_urls(urls, DOWNLOADS_DIR)
 
 
-def search_post_menu(results: list, query: str, km: KeyManager) -> str:
+def search_post_menu(results: list, query: str, km: KeyManager, page_size: int = 25) -> str:
     """After-search actions. Returns 'search' to loop, 'menu' to go back."""
     while True:
-        print(f"\n{C.BO}─── Actions ───{C.E}")
-        print("  1. Save links → find.txt")
-        print("  2. Download thumbnails (max resolution)")
-        print("  3. Download videos (yt-dlp → MP4)")
-        print("  4. Show channel analytics")
-        print("  5. New search")
+        print(f"\n{C.BO}─── Actions ({len(results)} result(s) loaded) ───{C.E}")
+        print("  1. Save ALL results → find.txt")
+        print("  2. Show results again (paginated)")
+        print("  3. Download thumbnails (max resolution)")
+        print("  4. Download videos (yt-dlp → MP4)")
+        print("  5. Show channel analytics")
+        print("  6. New search")
         print("  0. Back to main menu")
         ch = input(f"{C.CN}  > {C.E}").strip()
 
         if ch == '1':
+            print(f"{C.CN}Saving all {len(results)} result(s) to find.txt...{C.E}")
             save_results(results, query)
         elif ch == '2':
-            download_thumbnails_search(results)
+            cids = list({it['snippet'].get('channelId', '')
+                         for it in results if it['snippet'].get('channelId')})
+            ch_stats = get_channel_stats(km, cids)
+            display_results_paginated(results, ch_stats, page_size)
         elif ch == '3':
-            download_selected(results)
+            download_thumbnails_search(results)
         elif ch == '4':
+            download_selected(results)
+        elif ch == '5':
             cids = list({it['snippet'].get('channelId', '')
                          for it in results if it['snippet'].get('channelId')})
             stats = get_channel_stats(km, cids)
@@ -555,7 +628,7 @@ def search_post_menu(results: list, query: str, km: KeyManager) -> str:
                           f"Subs: {s['subs']}  Videos: {s['vids']}  Views: {s['views']}")
             else:
                 print(f"{C.Y}Could not load channel stats.{C.E}")
-        elif ch == '5':
+        elif ch == '6':
             return 'search'
         elif ch == '0':
             return 'menu'
@@ -571,19 +644,26 @@ def mode_search(km: KeyManager):
             continue
 
         filters = ask_filters()
-        print(f"\n{C.G}Searching for '{query}'...{C.E}")
-        results = search_youtube(km, query, filters)
+        page_size = filters.get('page_size', 25)
 
+        print(f"\n{C.G}Searching for '{query}'...{C.E}")
+        results = search_youtube_all(km, query, filters)
+
+        if not results:
+            print(f"{C.Y}No results found.{C.E}")
+            continue
+
+        # Fetch channel stats for the first batch to display alongside results
         cids = list({it['snippet'].get('channelId', '')
                      for it in results if it['snippet'].get('channelId')})
         ch_stats = get_channel_stats(km, cids)
-        display_results(results, ch_stats)
 
-        if results:
-            action = search_post_menu(results, query, km)
-            if action == 'menu':
-                return
-            # action == 'search' → loops back
+        display_results_paginated(results, ch_stats, page_size)
+
+        action = search_post_menu(results, query, km, page_size)
+        if action == 'menu':
+            return
+        # action == 'search' → loops back
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -889,7 +969,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.3           ║")
+    print("║       YouTube Channel Finder  v3.4           ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
