@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.3
+# YouTube Channel Finder v3.4
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -12,10 +12,14 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
   - **Quality**: any / SD / HD
   - **Date range**: last hour / today / week / month / year
   - **Language**: filter by relevance language code (e.g. `ru`, `en`, `ja`)
-  - **Max results**: 1–50
+  - **Results per page**: how many results to show at a time (1–50, default 25)
+- **Full search**: fetches ALL available results via API pagination (not limited to 25)
+- **Paginated display**: results shown in batches; press `[Space]` for next page, `[Escape]` to stop
+- Displays total results count and current page progress
 - Displays results with channel analytics (subscribers, total views, video count)
 - **Post-search actions**:
-  - Save video links to `find.txt` (links only, no titles)
+  - Save ALL video links to `find.txt` (URLs only, one per line)
+  - Re-display results (paginated)
   - Download max-resolution thumbnails
   - Download selected videos as MP4 with quality selection
   - View detailed channel analytics
@@ -129,6 +133,24 @@ CHANNELFINDER/
 ├── downloads/           # Downloaded videos + metadata
 └── parsed/              # Channel parse results
 ```
+
+---
+
+## Changelog
+
+### v3.4 (2026-02-16)
+- **Search**: fetches ALL results via `nextPageToken` pagination (no longer limited to 25)
+- **Paginated display**: results shown in batches; `[Space]` = next page, `[Escape]` = back to menu
+- **Total count**: shows total number of found results before display
+- **Save all**: saving to `find.txt` now includes ALL fetched results (URLs only)
+- **Re-display**: added option to re-view search results from the actions menu
+- **Filters**: replaced "Max results" with "Results per page" (controls display batch size)
+
+### v3.3
+- Added Mode 4 — Download Thumbnails (single video / entire channel)
+- Clean download progress bar with speed and ETA
+- Post-processing status messages (merging, converting)
+- API key quota check on startup
 
 ---
 
