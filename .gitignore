@@ -6,3 +6,8 @@ find.txt
 
 # Video links
 videolinks.txt
+
+# Folders
+downloads/
+parsed/
+thumbnails/
