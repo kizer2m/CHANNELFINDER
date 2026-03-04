@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.4
+YouTube Channel Finder v3.5
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Parse channel (long / shorts classification)
   Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
@@ -717,28 +717,54 @@ def resolve_channel_id(km: KeyManager, user_input: str):
 
 
 def fetch_all_channel_videos(km: KeyManager, channel_id: str) -> list:
-    """Paginate through all videos on a channel. Returns list of dicts."""
+    """Paginate through ALL videos on a channel using the uploads playlist.
+
+    Uses playlistItems().list() instead of search().list() because:
+      - search().list() caps results at ~500 and costs 100 quota units/call
+      - playlistItems().list() returns ALL videos and costs only 1 quota unit/call
+
+    The uploads playlist ID is derived by replacing the 'UC' prefix with 'UU'.
+    """
+    # Derive the uploads playlist ID from the channel ID
+    if channel_id.startswith('UC'):
+        uploads_playlist_id = 'UU' + channel_id[2:]
+    else:
+        # Fallback: fetch the uploads playlist ID from the channel resource
+        resp = api_call(km, lambda yt: yt.channels().list(
+            part="contentDetails", id=channel_id))
+        if not resp or not resp.get('items'):
+            print(f"{C.R}Could not resolve uploads playlist for channel.{C.E}")
+            return []
+        uploads_playlist_id = (resp['items'][0]
+                               .get('contentDetails', {})
+                               .get('relatedPlaylists', {})
+                               .get('uploads'))
+        if not uploads_playlist_id:
+            print(f"{C.R}Channel has no uploads playlist.{C.E}")
+            return []
+
     videos = []
     page_token = None
 
     while True:
         def req(yt, pt=page_token):
-            params = dict(part="snippet", channelId=channel_id,
-                          type="video", maxResults=50, order="date")
+            params = dict(part="snippet", playlistId=uploads_playlist_id,
+                          maxResults=50)
             if pt:
                 params['pageToken'] = pt
-            return yt.search().list(**params)
+            return yt.playlistItems().list(**params)
 
         resp = api_call(km, req)
         if not resp:
             break
 
         for it in resp.get('items', []):
-            vid = it['id'].get('videoId')
+            resource = it.get('snippet', {}).get('resourceId', {})
+            vid = resource.get('videoId')
             if vid:
                 videos.append(dict(
                     videoId=vid,
-                    title=it['snippet']['title'],
+                    title=it['snippet'].get('title', ''),
                     publishedAt=it['snippet'].get('publishedAt', ''),
                 ))
 
@@ -969,7 +995,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.4           ║")
+    print("║       YouTube Channel Finder  v3.5           ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 

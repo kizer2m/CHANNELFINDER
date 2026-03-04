@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.4
+# YouTube Channel Finder v3.5
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -26,7 +26,9 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 
 ### 📋 Mode 2 — Parse Channel
 - Accepts channel URL, `@handle`, or free-text search
-- Fetches **all** videos from a channel (paginated)
+- Fetches **all** videos from a channel using the **uploads playlist** (`playlistItems` API)
+  - No result cap — works correctly even for channels with **thousands** of videos
+  - Uses only **1 quota unit** per API call (100× cheaper than search)
 - Classifies videos into **Long** (>60s) and **Shorts** (≤60s)
 - Saves results to `parsed/` folder as separate files with links only:
   - `ChannelName_long.txt`
@@ -115,7 +117,7 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 8. *(Optional)* Click **Edit API key** to restrict it to YouTube Data API v3 only
 9. Paste the key into `api_keys.txt`
 
-> **Tip:** Each API key has a daily quota of **10,000 units**. A single search costs ~100 units. Add multiple keys to extend your daily capacity — the script rotates through them automatically.
+> **Tip:** Each API key has a daily quota of **10,000 units**. A single search costs ~100 units, while channel parsing uses only ~1 unit per page (50 videos). Add multiple keys to extend your daily capacity — the script rotates through them automatically.
 
 ---
 
@@ -137,6 +139,13 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v3.5 (2026-03-05)
+- **Channel parsing fix**: switched from `search().list()` to `playlistItems().list()` API
+  - `search().list()` had a hard cap of ~500 results and often returned far fewer (e.g. 13 instead of 2000+)
+  - `playlistItems().list()` returns **all** videos on a channel without any limit
+- **Quota optimization**: channel parsing now costs **1 unit/call** instead of 100 units/call (100× cheaper)
+- **Uploads playlist**: automatically derives the uploads playlist ID from the channel ID (`UC…` → `UU…`) with a fallback via `channels().list(part="contentDetails")`
 
 ### v3.4 (2026-02-16)
 - **Search**: fetches ALL results via `nextPageToken` pagination (no longer limited to 25)
