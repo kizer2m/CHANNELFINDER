@@ -7,6 +7,9 @@ find.txt
 # Video links
 videolinks.txt
 
+# Browser cookies export
+cookies.txt
+
 # Folders
 downloads/
 parsed/
