@@ -390,9 +390,13 @@ def _pick_quality() -> dict:
 
     opts = {}
     if q == '2':
-        opts['format'] = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best'
+        opts['format'] = ('bestvideo[height<=720]+bestaudio'
+                          '/bestvideo*[height<=720]+bestaudio'
+                          '/best[height<=720]/best/worst')
     elif q == '3':
-        opts['format'] = 'bestvideo[height<=480]+bestaudio/best[height<=480]/best'
+        opts['format'] = ('bestvideo[height<=480]+bestaudio'
+                          '/bestvideo*[height<=480]+bestaudio'
+                          '/best[height<=480]/best/worst')
     elif q == '4':
         opts['format'] = 'bestaudio/best'
         opts['postprocessors'] = [{
@@ -401,7 +405,8 @@ def _pick_quality() -> dict:
             'preferredquality': '192',
         }]
     else:
-        opts['format'] = 'bestvideo+bestaudio/best'
+        # Full fallback chain: adaptive DASH → any video+audio → combined → anything
+        opts['format'] = 'bestvideo+bestaudio/bestvideo*+bestaudio/best/worst'
 
     # For video modes (not audio-only), re-encode / remux to MP4
     if q != '4':
@@ -424,34 +429,68 @@ _BROWSERS = {
     '6': 'chromium',
 }
 
-# Known paths to Chrome's cookie DB on Windows
-_CHROME_COOKIE_PATHS = [
-    os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'Default', 'Network', 'Cookies'),
-    os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'Default', 'Cookies'),
-]
+def _find_chrome_cookie_db() -> str | None:
+    """Search for Chrome's cookie DB across all known profile folders."""
+    import glob
+    local = os.environ.get('LOCALAPPDATA', '')
+    patterns = [
+        os.path.join(local, 'Google', 'Chrome',       'User Data', '*', 'Network', 'Cookies'),
+        os.path.join(local, 'Google', 'Chrome',       'User Data', '*', 'Cookies'),
+        os.path.join(local, 'Google', 'Chrome Beta',  'User Data', '*', 'Network', 'Cookies'),
+        os.path.join(local, 'Google', 'Chrome SxS',   'User Data', '*', 'Network', 'Cookies'),
+    ]
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            # Prefer 'Default' profile
+            for m in matches:
+                if 'Default' in m:
+                    return m
+            return matches[0]
+    return None
 
 
 def _copy_browser_db_to_temp(browser: str) -> str | None:
     """
-    Pre-copy Chrome's locked cookie DB to a temp file.
-    yt-dlp will then read the copy, bypassing the OS file lock.
+    Pre-copy Chrome's locked cookie DB using sqlite3 backup (bypasses WAL lock).
+    NOTE: Chrome 127+ uses App-Bound Encryption — the DB copy will contain
+    encrypted values that cannot be decrypted outside Chrome. In that case
+    the copy succeeds but yt-dlp still cannot authenticate.
     Returns path to temp copy, or None if not applicable / not found.
     """
-    import shutil, tempfile
+    import sqlite3, shutil, tempfile
     if browser != 'chrome':
         return None
-    for src in _CHROME_COOKIE_PATHS:
-        if os.path.isfile(src):
-            try:
-                tmp = tempfile.NamedTemporaryFile(
-                    prefix='yt_chrome_cookies_', suffix='.db', delete=False)
-                tmp.close()
-                shutil.copy2(src, tmp.name)
-                return tmp.name
-            except Exception as e:
-                print(f"  {C.Y}Warning: could not pre-copy cookie DB — {e}{C.E}")
-                return None
-    return None
+
+    src = _find_chrome_cookie_db()
+    if not src:
+        print(f"  {C.Y}Warning: Chrome cookie DB not found under %LOCALAPPDATA%.{C.E}")
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(prefix='yt_chrome_cookies_', suffix='.db', delete=False)
+    tmp.close()
+
+    # Try sqlite3.backup with immutable flag (reads locked WAL DB without acquiring lock)
+    try:
+        uri = 'file:{}?mode=ro&nolock=1&immutable=1'.format(src.replace('\\', '/'))
+        src_conn = sqlite3.connect(uri, uri=True)
+        dst_conn = sqlite3.connect(tmp.name)
+        src_conn.backup(dst_conn)
+        src_conn.close()
+        dst_conn.close()
+        return tmp.name
+    except Exception:
+        pass
+
+    # Fallback: plain file copy
+    try:
+        shutil.copy2(src, tmp.name)
+        return tmp.name
+    except Exception as e:
+        print(f"  {C.Y}Warning: could not copy cookie DB — {e}{C.E}")
+        if os.path.isfile(tmp.name):
+            os.remove(tmp.name)
+        return None
 
 
 def _pick_cookie_source() -> dict:
@@ -463,8 +502,11 @@ def _pick_cookie_source() -> dict:
     print(f"\n{C.CN}─── Cookies / Authentication ───{C.E}")
     print("  YouTube may block downloads without authentication.")
     print(f"  {C.Y}1.{C.E} No cookies (try without authentication)")
-    print(f"  {C.Y}2.{C.E} Use cookies from browser (recommended if blocked)")
-    print(f"  {C.Y}3.{C.E} Use cookies from a .txt file (Netscape format)")
+    print(f"  {C.Y}2.{C.E} Use cookies from browser")
+    print(f"      {C.Y}⚠  Chrome 127+ blocks cookie extraction (App-Bound Encryption).{C.E}")
+    print(f"         Use Firefox or Edge, or export via option 3.")
+    print(f"  {C.Y}3.{C.E} Use cookies from a .txt file {C.G}← most reliable{C.E}")
+    print(f"      Export via 'Get cookies.txt LOCALLY' (Chrome/Edge) or 'cookies.txt' (Firefox)")
     ch = input(f"  Choice [1]: ").strip()
 
     if ch == '2':
@@ -475,25 +517,41 @@ def _pick_cookie_source() -> dict:
         browser = _BROWSERS.get(bch, 'chrome')
         print(f"  {C.G}Will use cookies from: {browser}{C.E}")
 
-        # ── Chrome-specific: try to pre-copy the DB to avoid the lock error
-        tmp_db = _copy_browser_db_to_temp(browser)
-        if tmp_db:
-            print(f"  {C.G}✓ Cookie DB pre-copied to temp file (Chrome was open — using snapshot).{C.E}")
-            return {'cookiefile': tmp_db, '_cookie_mode': 'file',
-                    '_tmp_cookie_db': tmp_db, '_browser': browser}
+        if browser == 'chrome':
+            print(f"  {C.Y}⚠  Chrome 127+ uses App-Bound Encryption — this may fail.{C.E}")
+            print(f"  {C.Y}   If it does, use Firefox (option 2→2) or cookies.txt (option 3).{C.E}")
 
-        # Fall back to asking yt-dlp to read directly (works when browser is CLOSED)
-        print(f"  {C.Y}⚠  IMPORTANT: {browser.capitalize()} must be fully closed for this to work!{C.E}")
-        print(f"  {C.Y}   If it is open, close it now and press Enter to continue...{C.E}")
+        # yt-dlp reads the cookie DB directly — browser must be CLOSED
+        print(f"  {C.Y}   Close {browser.capitalize()} completely, then press Enter.{C.E}")
         input("  Press Enter when ready: ")
         return {'cookiesfrombrowser': (browser, None, None, None),
                 '_cookie_mode': 'browser', '_browser': browser}
 
     if ch == '3':
-        cfile = input("  Path to cookies .txt file: ").strip().strip('"')
-        if not os.path.isfile(cfile):
-            print(f"  {C.R}File not found, proceeding without cookies.{C.E}")
+        raw = input("  Path to cookies.txt file (or folder): ").strip().strip('"')
+
+        # If the user gave a directory, auto-scan it for a cookies file
+        if os.path.isdir(raw):
+            candidates = ['cookies.txt', 'www.youtube.com_cookies.txt', 'youtube_cookies.txt']
+            found = None
+            for name in candidates:
+                p = os.path.join(raw, name)
+                if os.path.isfile(p):
+                    found = p
+                    break
+            if found:
+                print(f"  {C.G}Found: {found}{C.E}")
+                cfile = found
+            else:
+                print(f"  {C.R}No cookies.txt found in: {raw}{C.E}")
+                print(f"  {C.Y}  Expected one of: {', '.join(candidates)}{C.E}")
+                return {'_cookie_mode': 'none'}
+        elif os.path.isfile(raw):
+            cfile = raw
+        else:
+            print(f"  {C.R}Not found: {raw}{C.E}")
             return {'_cookie_mode': 'none'}
+
         print(f"  {C.G}Will use cookies from: {cfile}{C.E}")
         return {'cookiefile': cfile, '_cookie_mode': 'file'}
 
@@ -542,14 +600,26 @@ def _save_video_metadata(info_dict: dict, out_dir: str):
 
 
 class _YtLogger:
-    """Custom logger for yt-dlp that suppresses warnings."""
+    """Custom logger for yt-dlp: suppresses noise, shows errors and important warnings."""
+    _IMPORTANT_WARNINGS = [
+        'cookies are no longer valid',
+        'cookies have likely been rotated',
+        'sign in',
+        'no supported javascript',
+    ]
+
     def debug(self, msg):
-        # yt-dlp sends info messages via debug with [download] prefix
-        pass
+        pass  # suppress verbose debug output
+
     def info(self, msg):
         pass
+
     def warning(self, msg):
-        pass  # suppress all warnings
+        ml = msg.lower()
+        # Only show warnings that the user actually needs to act on
+        if any(s in ml for s in self._IMPORTANT_WARNINGS):
+            print(f"  {C.Y}⚠  {msg}{C.E}")
+
     def error(self, msg):
         print(f"{C.R}  ERROR: {msg}{C.E}")
 
@@ -610,17 +680,21 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
     """Assemble the full yt-dlp options dict."""
     template = os.path.join(out_dir, '%(title)s [%(id)s].%(ext)s')
     opts = {
-        'outtmpl': template,
-        'ignoreerrors': False,   # we handle errors ourselves for retry logic
-        'encoding': 'utf-8',
+        'outtmpl':          template,
+        'ignoreerrors':     False,    # we handle errors ourselves for retry logic
+        'encoding':         'utf-8',
         'windowsfilenames': True,
         'restrictfilenames': False,
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True,
-        'logger': _YtLogger(),
-        'progress_hooks': [_progress_hook],
+        'quiet':            True,
+        'no_warnings':      False,    # let _YtLogger filter selectively
+        'noprogress':       True,
+        'logger':           _YtLogger(),
+        'progress_hooks':   [_progress_hook],
         'postprocessor_hooks': [_postprocessor_hook],
+        # Use Node.js for JS extraction (yt-dlp expects dict format: {runtime: {config}})
+        'js_runtimes':      {'node': {}},
+        # Download EJS challenge solver from GitHub (required to decrypt YouTube stream URLs)
+        'remote_components': ['ejs:github'],
     }
     opts.update(quality_opts)
     # Apply cookie options (strip our internal meta keys)
@@ -632,20 +706,25 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
 
 def _download_one(ydl, url: str, i: int, total: int, out_dir: str) -> bool:
     """Download a single URL. Returns True on success, False on failure."""
+    # Use process=False to get title/basic info WITHOUT running format selection.
+    # This avoids format-not-available errors during the info step.
+    raw = ydl.extract_info(url, download=False, process=False)
+    if not raw:
+        print(f"{C.R}  Could not fetch info for {url}{C.E}")
+        return False
+    title = raw.get('title') or raw.get('id') or url
+    print(f"{C.BO}[{i}/{total}]{C.E} {C.CN}{title}{C.E}")
+    print(f"  → {out_dir}")
+    # download() runs the full pipeline: format selection + download + post-process
+    ydl.download([url])
+    # For metadata, re-fetch with full processing (no download) to get resolved fields
     try:
         info = ydl.extract_info(url, download=False)
-        if not info:
-            print(f"{C.R}  Could not fetch info for {url}{C.E}")
-            return False
-        title = info.get('title', 'Unknown')
-        print(f"{C.BO}[{i}/{total}]{C.E} {C.CN}{title}{C.E}")
-        print(f"  → {out_dir}")
-        ydl.download([url])
-        _save_video_metadata(info, out_dir)
-        print()
-        return True
-    except Exception as e:
-        raise  # let caller handle
+        _save_video_metadata(info or raw, out_dir)
+    except Exception:
+        _save_video_metadata(raw, out_dir)  # use raw info as fallback
+    print()
+    return True
 
 
 def _cleanup_tmp_cookie_db(cookie_opts: dict):
