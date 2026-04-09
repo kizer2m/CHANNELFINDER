@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.6
+YouTube Channel Finder v3.7
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Parse channel (long / shorts classification)
   Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
@@ -1280,7 +1280,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.6           ║")
+    print("║       YouTube Channel Finder  v3.7           ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
