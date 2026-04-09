@@ -11,3 +11,8 @@ videolinks.txt
 downloads/
 parsed/
 thumbnails/
+__pycache__/
+
+# AI context files (local only)
+CLAUDE.md
+GEMINI.md
