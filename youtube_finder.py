@@ -424,6 +424,35 @@ _BROWSERS = {
     '6': 'chromium',
 }
 
+# Known paths to Chrome's cookie DB on Windows
+_CHROME_COOKIE_PATHS = [
+    os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'Default', 'Network', 'Cookies'),
+    os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'Default', 'Cookies'),
+]
+
+
+def _copy_browser_db_to_temp(browser: str) -> str | None:
+    """
+    Pre-copy Chrome's locked cookie DB to a temp file.
+    yt-dlp will then read the copy, bypassing the OS file lock.
+    Returns path to temp copy, or None if not applicable / not found.
+    """
+    import shutil, tempfile
+    if browser != 'chrome':
+        return None
+    for src in _CHROME_COOKIE_PATHS:
+        if os.path.isfile(src):
+            try:
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix='yt_chrome_cookies_', suffix='.db', delete=False)
+                tmp.close()
+                shutil.copy2(src, tmp.name)
+                return tmp.name
+            except Exception as e:
+                print(f"  {C.Y}Warning: could not pre-copy cookie DB — {e}{C.E}")
+                return None
+    return None
+
 
 def _pick_cookie_source() -> dict:
     """
@@ -445,7 +474,20 @@ def _pick_cookie_source() -> dict:
         bch = input("    Choice [1]: ").strip()
         browser = _BROWSERS.get(bch, 'chrome')
         print(f"  {C.G}Will use cookies from: {browser}{C.E}")
-        return {'cookiesfrombrowser': (browser, None, None, None), '_cookie_mode': 'browser', '_browser': browser}
+
+        # ── Chrome-specific: try to pre-copy the DB to avoid the lock error
+        tmp_db = _copy_browser_db_to_temp(browser)
+        if tmp_db:
+            print(f"  {C.G}✓ Cookie DB pre-copied to temp file (Chrome was open — using snapshot).{C.E}")
+            return {'cookiefile': tmp_db, '_cookie_mode': 'file',
+                    '_tmp_cookie_db': tmp_db, '_browser': browser}
+
+        # Fall back to asking yt-dlp to read directly (works when browser is CLOSED)
+        print(f"  {C.Y}⚠  IMPORTANT: {browser.capitalize()} must be fully closed for this to work!{C.E}")
+        print(f"  {C.Y}   If it is open, close it now and press Enter to continue...{C.E}")
+        input("  Press Enter when ready: ")
+        return {'cookiesfrombrowser': (browser, None, None, None),
+                '_cookie_mode': 'browser', '_browser': browser}
 
     if ch == '3':
         cfile = input("  Path to cookies .txt file: ").strip().strip('"')
@@ -606,6 +648,41 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str) -> bool:
         raise  # let caller handle
 
 
+def _cleanup_tmp_cookie_db(cookie_opts: dict):
+    """Delete the temp cookie DB file if one was created."""
+    tmp = cookie_opts.get('_tmp_cookie_db')
+    if tmp and os.path.isfile(tmp):
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+
+_COOKIE_DB_ERROR_SIGNALS = [
+    'could not copy',
+    'cookie database',
+    'database is locked',
+    'unable to open database',
+]
+
+
+def _is_cookie_db_error(msg: str) -> bool:
+    ml = msg.lower()
+    return any(s in ml for s in _COOKIE_DB_ERROR_SIGNALS)
+
+
+def _print_cookie_db_help(browser: str):
+    print(f"\n{C.R}  ✗ Could not read {browser.capitalize()} cookie database.{C.E}")
+    print(f"  {C.Y}This usually means the browser is still running.{C.E}")
+    print(f"  {C.Y}Solutions:{C.E}")
+    print(f"    1. Close ALL {browser.capitalize()} windows completely, then try again.")
+    print(f"    2. Export cookies to a .txt file using a browser extension:")
+    print(f"       • Chrome/Edge: 'Get cookies.txt LOCALLY' extension")
+    print(f"       • Firefox: 'cookies.txt' extension")
+    print(f"       Then choose option 3 (cookies from file) in the menu.")
+    print(f"    3. Try a different browser (e.g. Firefox or Edge).\n")
+
+
 def _download_urls(urls: list, out_dir: str):
     """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata."""
     try:
@@ -619,6 +696,7 @@ def _download_urls(urls: list, out_dir: str):
     quality_opts  = _pick_quality()
     cookie_opts   = _pick_cookie_source()
     cookie_mode   = cookie_opts.get('_cookie_mode', 'none')
+    browser_name  = cookie_opts.get('_browser', 'chrome')
 
     base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
 
@@ -626,20 +704,29 @@ def _download_urls(urls: list, out_dir: str):
 
     failed_urls = []
 
-    with YoutubeDL(base_opts) as ydl:
-        for i, url in enumerate(urls, 1):
-            try:
-                _download_one(ydl, url, i, len(urls), out_dir)
-            except Exception as e:
-                err_msg = str(e)
-                print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+    try:
+        with YoutubeDL(base_opts) as ydl:
+            for i, url in enumerate(urls, 1):
+                try:
+                    _download_one(ydl, url, i, len(urls), out_dir)
+                except Exception as e:
+                    err_msg = str(e)
 
-                # If it looks like a bot block and we're not already using cookies
-                if _is_bot_error(err_msg) and cookie_mode == 'none':
-                    print(f"{C.Y}  ↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
-                    failed_urls.append(url)
-                else:
-                    print()
+                    # Cookie database locked / copy error
+                    if _is_cookie_db_error(err_msg):
+                        _print_cookie_db_help(browser_name)
+                        break  # no point continuing, all URLs will hit the same error
+
+                    print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+
+                    # If it looks like a bot block and we're not already using cookies
+                    if _is_bot_error(err_msg) and cookie_mode == 'none':
+                        print(f"{C.Y}  ↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
+                        failed_urls.append(url)
+                    else:
+                        print()
+    finally:
+        _cleanup_tmp_cookie_db(cookie_opts)
 
     # ── Auto-retry with browser cookies ────────────────────────────────
     if failed_urls:
@@ -649,18 +736,32 @@ def _download_urls(urls: list, out_dir: str):
             print(f"    {k}. {v.capitalize()}")
         bch = input("    Choice [1 = Chrome]: ").strip()
         browser = _BROWSERS.get(bch, 'chrome')
-        print(f"  {C.G}Using cookies from: {browser}{C.E}\n")
 
-        retry_cookie_opts = {'cookiesfrombrowser': (browser, None, None, None)}
+        # Try to pre-copy the cookie DB before yt-dlp touches it
+        tmp_db = _copy_browser_db_to_temp(browser)
+        if tmp_db:
+            print(f"  {C.G}✓ Cookie DB pre-copied (Chrome snapshot).{C.E}\n")
+            retry_cookie_opts = {'cookiefile': tmp_db, '_tmp_cookie_db': tmp_db}
+        else:
+            print(f"  {C.Y}⚠  Make sure {browser.capitalize()} is fully closed, then press Enter.{C.E}")
+            input("  Press Enter when ready: ")
+            retry_cookie_opts = {'cookiesfrombrowser': (browser, None, None, None)}
+
         retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
 
-        with YoutubeDL(retry_opts) as ydl_retry:
-            for i, url in enumerate(failed_urls, 1):
-                try:
-                    _download_one(ydl_retry, url, i, len(failed_urls), out_dir)
-                except Exception as e:
-                    print(f"\n{C.R}  Retry failed: {str(e)[:200]}{C.E}\n")
-                    print(f"  {C.Y}Tip: make sure {browser.capitalize()} is closed or try a different browser.{C.E}")
+        try:
+            with YoutubeDL(retry_opts) as ydl_retry:
+                for i, url in enumerate(failed_urls, 1):
+                    try:
+                        _download_one(ydl_retry, url, i, len(failed_urls), out_dir)
+                    except Exception as e:
+                        err_msg = str(e)
+                        if _is_cookie_db_error(err_msg):
+                            _print_cookie_db_help(browser)
+                            break
+                        print(f"\n{C.R}  Retry failed: {err_msg[:200]}{C.E}\n")
+        finally:
+            _cleanup_tmp_cookie_db(retry_cookie_opts)
 
     print(f"{C.G}All done → {out_dir}{C.E}")
 
