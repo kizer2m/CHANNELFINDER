@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.5
+# YouTube Channel Finder v3.6
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -36,8 +36,14 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 
 ### ⬇️ Mode 3 — Batch Download
 - Reads video URLs from `videolinks.txt` (one URL per line)
-- Quality selection: Best / 720p / 480p / Audio-only (MP3)
+- **Quality selection**: Best / 720p / 480p / Audio-only (MP3)
 - Re-encodes to MP4 automatically via FFmpeg
+- **🍪 Cookie / Authentication support** *(new in v3.6)*:
+  - Choose how to handle YouTube authentication before every download:
+    - **No cookies** — try without authentication first
+    - **Browser cookies** — extract cookies automatically from Chrome, Firefox, Edge, Brave, Opera, or Chromium
+    - **Cookies file** — supply a Netscape-format `cookies.txt` file
+  - If downloading without cookies fails due to a bot-detection block, the tool **automatically retries** the blocked videos by asking which browser to pull cookies from — no manual re-run needed
 - **Clean download UI**:
   - Green progress bar with speed and ETA
   - No warnings cluttering the console
@@ -105,6 +111,37 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 
 ---
 
+## Fixing "Sign in to confirm you're not a bot"
+
+YouTube increasingly blocks anonymous downloads. The tool handles this in two ways:
+
+### Option A — Let the tool auto-retry (easiest)
+1. When the cookie prompt appears, pick **1 (No cookies)** and start the download
+2. If a video is blocked, the tool will print:
+   ```
+   ↳ Bot/auth block detected — will retry with browser cookies.
+   ```
+3. After the batch finishes you'll be asked which browser to use for the retry — that's it
+
+### Option B — Use browser cookies upfront (most reliable)
+1. When the cookie prompt appears, pick **2 (Use cookies from browser)**
+2. Select your browser (Chrome / Firefox / Edge / Brave / Opera / Chromium)
+3. Make sure you are **logged into YouTube** in that browser
+
+> **Tips for browser cookies:**
+> - Some browsers (Chrome, Chromium) lock their cookie database while running.  
+>   Close the browser first, or use a different one if you get a lock error.
+> - The browser profile must have an active YouTube session (not logged out).
+> - Edge works well on Windows because it stays logged into Google accounts.
+
+### Option C — Use a cookies.txt file
+1. Export cookies from your browser using an extension such as  
+   *"Get cookies.txt LOCALLY"* (Chrome/Firefox)
+2. When the cookie prompt appears, pick **3 (Cookies from file)**
+3. Paste the path to the `.txt` file
+
+---
+
 ## How to Get a YouTube Data API Key
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
@@ -139,6 +176,17 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v3.6 (2026-04-09)
+- **Cookie / authentication support** for all download modes:
+  - New prompt before every download: choose *no cookies*, *browser cookies*, or *cookies file*
+  - Supported browsers: Chrome, Firefox, Edge, Brave, Opera, Chromium
+  - **Auto-retry**: if a video is blocked by YouTube's bot check and cookies were not used initially, the tool automatically queues the failed URLs and retries them with browser cookies after the batch finishes
+- **Refactored download internals**:
+  - `_build_ydl_opts()` — centralises yt-dlp option assembly
+  - `_download_one()` — single-URL helper shared by first pass and retry
+  - `_is_bot_error()` — detects bot/auth signals in error messages
+- Version bump: `3.5` → `3.6`
 
 ### v3.5 (2026-03-05)
 - **Channel parsing fix**: switched from `search().list()` to `playlistItems().list()` API

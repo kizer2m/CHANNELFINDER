@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.5
+YouTube Channel Finder v3.6
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Parse channel (long / shorts classification)
   Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
@@ -414,6 +414,60 @@ def _pick_quality() -> dict:
     return opts
 
 
+# Browsers supported by yt-dlp --cookies-from-browser
+_BROWSERS = {
+    '1': 'chrome',
+    '2': 'firefox',
+    '3': 'edge',
+    '4': 'brave',
+    '5': 'opera',
+    '6': 'chromium',
+}
+
+
+def _pick_cookie_source() -> dict:
+    """
+    Ask the user how to handle cookies.
+    Returns a dict of yt-dlp options to merge, plus a special key
+    '_cookie_mode' = 'none' | 'browser' | 'file' for retry logic.
+    """
+    print(f"\n{C.CN}─── Cookies / Authentication ───{C.E}")
+    print("  YouTube may block downloads without authentication.")
+    print(f"  {C.Y}1.{C.E} No cookies (try without authentication)")
+    print(f"  {C.Y}2.{C.E} Use cookies from browser (recommended if blocked)")
+    print(f"  {C.Y}3.{C.E} Use cookies from a .txt file (Netscape format)")
+    ch = input(f"  Choice [1]: ").strip()
+
+    if ch == '2':
+        print(f"\n  {C.CN}Select browser:{C.E}")
+        for k, v in _BROWSERS.items():
+            print(f"    {k}. {v.capitalize()}")
+        bch = input("    Choice [1]: ").strip()
+        browser = _BROWSERS.get(bch, 'chrome')
+        print(f"  {C.G}Will use cookies from: {browser}{C.E}")
+        return {'cookiesfrombrowser': (browser, None, None, None), '_cookie_mode': 'browser', '_browser': browser}
+
+    if ch == '3':
+        cfile = input("  Path to cookies .txt file: ").strip().strip('"')
+        if not os.path.isfile(cfile):
+            print(f"  {C.R}File not found, proceeding without cookies.{C.E}")
+            return {'_cookie_mode': 'none'}
+        print(f"  {C.G}Will use cookies from: {cfile}{C.E}")
+        return {'cookiefile': cfile, '_cookie_mode': 'file'}
+
+    return {'_cookie_mode': 'none'}
+
+
+_BOT_SIGNALS = [
+    'sign in to confirm',
+    'not a bot',
+    'cookies',
+    '429',
+    'too many requests',
+    'nsig extraction failed',
+]
+
+
 def _save_video_metadata(info_dict: dict, out_dir: str):
     """Save all available metadata of a video to a .txt file in out_dir."""
     if not info_dict:
@@ -504,25 +558,18 @@ def _postprocessor_hook(d):
             print(f"  {C.G}✓ Converted to MP4{C.E}")
 
 
-def _download_urls(urls: list, out_dir: str):
-    """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata."""
-    try:
-        from yt_dlp import YoutubeDL
-    except ImportError:
-        print(f"{C.R}yt-dlp not installed. Run: pip install yt-dlp{C.E}")
-        return
+def _is_bot_error(msg: str) -> bool:
+    """Return True if the error message looks like a bot/auth block."""
+    msg_lower = msg.lower()
+    return any(sig in msg_lower for sig in _BOT_SIGNALS)
 
-    os.makedirs(out_dir, exist_ok=True)
 
-    quality_opts = _pick_quality()
-
-    # %(title)s keeps original title in any language
-    # %(id)s appended guarantees uniqueness for duplicate titles
+def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict:
+    """Assemble the full yt-dlp options dict."""
     template = os.path.join(out_dir, '%(title)s [%(id)s].%(ext)s')
-
     opts = {
         'outtmpl': template,
-        'ignoreerrors': True,
+        'ignoreerrors': False,   # we handle errors ourselves for retry logic
         'encoding': 'utf-8',
         'windowsfilenames': True,
         'restrictfilenames': False,
@@ -534,29 +581,87 @@ def _download_urls(urls: list, out_dir: str):
         'postprocessor_hooks': [_postprocessor_hook],
     }
     opts.update(quality_opts)
+    # Apply cookie options (strip our internal meta keys)
+    for k, v in cookie_opts.items():
+        if not k.startswith('_'):
+            opts[k] = v
+    return opts
+
+
+def _download_one(ydl, url: str, i: int, total: int, out_dir: str) -> bool:
+    """Download a single URL. Returns True on success, False on failure."""
+    try:
+        info = ydl.extract_info(url, download=False)
+        if not info:
+            print(f"{C.R}  Could not fetch info for {url}{C.E}")
+            return False
+        title = info.get('title', 'Unknown')
+        print(f"{C.BO}[{i}/{total}]{C.E} {C.CN}{title}{C.E}")
+        print(f"  → {out_dir}")
+        ydl.download([url])
+        _save_video_metadata(info, out_dir)
+        print()
+        return True
+    except Exception as e:
+        raise  # let caller handle
+
+
+def _download_urls(urls: list, out_dir: str):
+    """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata."""
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        print(f"{C.R}yt-dlp not installed. Run: pip install yt-dlp{C.E}")
+        return
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    quality_opts  = _pick_quality()
+    cookie_opts   = _pick_cookie_source()
+    cookie_mode   = cookie_opts.get('_cookie_mode', 'none')
+
+    base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
 
     print(f"\n{C.G}Starting download of {len(urls)} video(s)...{C.E}\n")
-    with YoutubeDL(opts) as ydl:
+
+    failed_urls = []
+
+    with YoutubeDL(base_opts) as ydl:
         for i, url in enumerate(urls, 1):
             try:
-                # Extract info first to get the title
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    print(f"{C.R}  Could not fetch info for {url}{C.E}")
-                    continue
-                title = info.get('title', 'Unknown')
-                vid = info.get('id', '?')
-                print(f"{C.BO}[{i}/{len(urls)}]{C.E} {C.CN}{title}{C.E}")
-                print(f"  → {out_dir}")
-
-                # Now download
-                ydl.download([url])
-
-                # Save metadata
-                _save_video_metadata(info, out_dir)
-                print()
+                _download_one(ydl, url, i, len(urls), out_dir)
             except Exception as e:
-                print(f"\n{C.R}Error: {e}{C.E}\n")
+                err_msg = str(e)
+                print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+
+                # If it looks like a bot block and we're not already using cookies
+                if _is_bot_error(err_msg) and cookie_mode == 'none':
+                    print(f"{C.Y}  ↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
+                    failed_urls.append(url)
+                else:
+                    print()
+
+    # ── Auto-retry with browser cookies ────────────────────────────────
+    if failed_urls:
+        print(f"\n{C.Y}─── Retrying {len(failed_urls)} blocked video(s) with browser cookies ───{C.E}")
+        print(f"  {C.CN}Select browser for cookies:{C.E}")
+        for k, v in _BROWSERS.items():
+            print(f"    {k}. {v.capitalize()}")
+        bch = input("    Choice [1 = Chrome]: ").strip()
+        browser = _BROWSERS.get(bch, 'chrome')
+        print(f"  {C.G}Using cookies from: {browser}{C.E}\n")
+
+        retry_cookie_opts = {'cookiesfrombrowser': (browser, None, None, None)}
+        retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
+
+        with YoutubeDL(retry_opts) as ydl_retry:
+            for i, url in enumerate(failed_urls, 1):
+                try:
+                    _download_one(ydl_retry, url, i, len(failed_urls), out_dir)
+                except Exception as e:
+                    print(f"\n{C.R}  Retry failed: {str(e)[:200]}{C.E}\n")
+                    print(f"  {C.Y}Tip: make sure {browser.capitalize()} is closed or try a different browser.{C.E}")
+
     print(f"{C.G}All done → {out_dir}{C.E}")
 
 
@@ -995,7 +1100,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.5           ║")
+    print("║       YouTube Channel Finder  v3.6           ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
