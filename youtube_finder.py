@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.7
+YouTube Channel Finder v3.7.1
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Parse channel (long / shorts classification)
   Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
@@ -493,6 +493,57 @@ def _copy_browser_db_to_temp(browser: str) -> str | None:
         return None
 
 
+# ── Cookie file candidates (in order of priority) ──────────────────────
+_COOKIE_CANDIDATES = ['cookies.txt', 'www.youtube.com_cookies.txt', 'youtube_cookies.txt']
+
+# Lightweight public video used to validate cookies (Rick Astley – Never Gonna Give You Up)
+_COOKIE_TEST_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+
+
+def _validate_cookie_file(cfile: str) -> bool:
+    """
+    Try a lightweight yt-dlp extract_info (no download) with the given cookies.txt.
+    Returns True if cookies appear valid, False otherwise.
+    """
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        return True  # can't validate, assume ok
+
+    print(f"  {C.CN}Validating cookies...{C.E}", end='', flush=True)
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'cookiefile': cfile,
+        'logger': _YtLogger(),
+        'skip_download': True,
+    }
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(_COOKIE_TEST_URL, download=False, process=False)
+        if info and info.get('id'):
+            print(f" {C.G}OK ✓{C.E}")
+            return True
+        print(f" {C.R}FAILED ✗{C.E}")
+        return False
+    except Exception as e:
+        msg = str(e).lower()
+        if any(s in msg for s in ('sign in', 'not a bot', '429', 'confirm')):
+            print(f" {C.R}FAILED ✗  (cookies rejected by YouTube){C.E}")
+        else:
+            print(f" {C.R}FAILED ✗  ({e}){C.E}")
+        return False
+
+
+def _scan_dir_for_cookies(directory: str) -> str | None:
+    """Scan a directory for a Netscape cookies file. Returns path or None."""
+    for name in _COOKIE_CANDIDATES:
+        p = os.path.join(directory, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def _pick_cookie_source() -> dict:
     """
     Ask the user how to handle cookies.
@@ -528,28 +579,42 @@ def _pick_cookie_source() -> dict:
                 '_cookie_mode': 'browser', '_browser': browser}
 
     if ch == '3':
-        raw = input("  Path to cookies.txt file (or folder): ").strip().strip('"')
+        # ── Option 3: cookies.txt file ─────────────────────────────────
+        print(f"\n  {C.CN}Cookie file selection:{C.E}")
+        print(f"  {C.Y}[Enter]{C.E} — scan current script folder for cookies.txt automatically")
+        print(f"  {C.Y}[Path] {C.E} — type a custom path to a file or folder, then press Enter")
+        raw = input("  Path (or Enter to scan script folder): ").strip().strip('"')
 
-        # If the user gave a directory, auto-scan it for a cookies file
-        if os.path.isdir(raw):
-            candidates = ['cookies.txt', 'www.youtube.com_cookies.txt', 'youtube_cookies.txt']
-            found = None
-            for name in candidates:
-                p = os.path.join(raw, name)
-                if os.path.isfile(p):
-                    found = p
-                    break
+        if not raw:
+            # Auto-scan the folder where the script lives
+            found = _scan_dir_for_cookies(SCRIPT_DIR)
             if found:
                 print(f"  {C.G}Found: {found}{C.E}")
                 cfile = found
             else:
-                print(f"  {C.R}No cookies.txt found in: {raw}{C.E}")
-                print(f"  {C.Y}  Expected one of: {', '.join(candidates)}{C.E}")
+                print(f"  {C.R}No cookies file found in: {SCRIPT_DIR}{C.E}")
+                print(f"  {C.Y}  Expected one of: {', '.join(_COOKIE_CANDIDATES)}{C.E}")
+                return {'_cookie_mode': 'none'}
+        elif os.path.isdir(raw):
+            # User gave a directory — scan it
+            found = _scan_dir_for_cookies(raw)
+            if found:
+                print(f"  {C.G}Found: {found}{C.E}")
+                cfile = found
+            else:
+                print(f"  {C.R}No cookies file found in: {raw}{C.E}")
+                print(f"  {C.Y}  Expected one of: {', '.join(_COOKIE_CANDIDATES)}{C.E}")
                 return {'_cookie_mode': 'none'}
         elif os.path.isfile(raw):
             cfile = raw
         else:
             print(f"  {C.R}Not found: {raw}{C.E}")
+            return {'_cookie_mode': 'none'}
+
+        # ── Validate cookies before proceeding ─────────────────────────
+        if not _validate_cookie_file(cfile):
+            print(f"  {C.R}Cookie validation failed — cookies are expired or invalid.{C.E}")
+            print(f"  {C.Y}  Re-export cookies from your browser and try again.{C.E}")
             return {'_cookie_mode': 'none'}
 
         print(f"  {C.G}Will use cookies from: {cfile}{C.E}")
@@ -704,8 +769,31 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
     return opts
 
 
-def _download_one(ydl, url: str, i: int, total: int, out_dir: str) -> bool:
-    """Download a single URL. Returns True on success, False on failure."""
+def _remove_url_from_videolinks(url: str):
+    """
+    Remove a single URL from videolinks.txt after a successful download.
+    Preserves all other lines (including comment lines starting with #).
+    """
+    if not os.path.isfile(VIDEOLINKS):
+        return
+    try:
+        with open(VIDEOLINKS, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        new_lines = [l for l in lines if l.strip() != url]
+        if len(new_lines) != len(lines):  # only write if something changed
+            with open(VIDEOLINKS, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+    except Exception as e:
+        print(f"  {C.Y}⚠  Could not update videolinks.txt: {e}{C.E}")
+
+
+def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
+                  from_videolinks: bool = False) -> bool:
+    """Download a single URL. Returns True on success, False on failure.
+
+    When from_videolinks=True the URL will be removed from videolinks.txt
+    after a successful download.
+    """
     # Use process=False to get title/basic info WITHOUT running format selection.
     # This avoids format-not-available errors during the info step.
     raw = ydl.extract_info(url, download=False, process=False)
@@ -723,6 +811,10 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str) -> bool:
         _save_video_metadata(info or raw, out_dir)
     except Exception:
         _save_video_metadata(raw, out_dir)  # use raw info as fallback
+    # Remove from videolinks.txt if this batch came from there
+    if from_videolinks:
+        _remove_url_from_videolinks(url)
+        print(f"  {C.G}✓ Removed from videolinks.txt{C.E}")
     print()
     return True
 
@@ -762,8 +854,12 @@ def _print_cookie_db_help(browser: str):
     print(f"    3. Try a different browser (e.g. Firefox or Edge).\n")
 
 
-def _download_urls(urls: list, out_dir: str):
-    """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata."""
+def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
+    """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata.
+
+    When from_videolinks=True each successfully downloaded URL is removed from
+    videolinks.txt immediately after download.
+    """
     try:
         from yt_dlp import YoutubeDL
     except ImportError:
@@ -787,7 +883,8 @@ def _download_urls(urls: list, out_dir: str):
         with YoutubeDL(base_opts) as ydl:
             for i, url in enumerate(urls, 1):
                 try:
-                    _download_one(ydl, url, i, len(urls), out_dir)
+                    _download_one(ydl, url, i, len(urls), out_dir,
+                                  from_videolinks=from_videolinks)
                 except Exception as e:
                     err_msg = str(e)
 
@@ -832,7 +929,8 @@ def _download_urls(urls: list, out_dir: str):
             with YoutubeDL(retry_opts) as ydl_retry:
                 for i, url in enumerate(failed_urls, 1):
                     try:
-                        _download_one(ydl_retry, url, i, len(failed_urls), out_dir)
+                        _download_one(ydl_retry, url, i, len(failed_urls), out_dir,
+                                      from_videolinks=from_videolinks)
                     except Exception as e:
                         err_msg = str(e)
                         if _is_cookie_db_error(err_msg):
@@ -1167,7 +1265,7 @@ def mode_download():
     for i, u in enumerate(urls, 1):
         print(f"  {i}. {u}")
 
-    _download_urls(urls, DOWNLOADS_DIR)
+    _download_urls(urls, DOWNLOADS_DIR, from_videolinks=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1280,7 +1378,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.7           ║")
+    print("║       YouTube Channel Finder  v3.7.1         ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
