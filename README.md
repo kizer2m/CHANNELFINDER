@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.7
+# YouTube Channel Finder v3.7.1
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -42,8 +42,12 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
   - Choose how to handle YouTube authentication before every download:
     - **No cookies** — try without authentication first
     - **Browser cookies** — extract cookies from Firefox, Edge, Brave, Opera, or Chromium (Chrome 127+ may fail due to App-Bound Encryption)
-    - **Cookies file** — supply a Netscape-format `cookies.txt` file (path to file **or folder** — auto-detected)
+    - **Cookies file** — supply a Netscape-format `cookies.txt` file:
+      - Press `[Enter]` to auto-scan the script folder for `cookies.txt` automatically
+      - Or type a custom path to a file or folder — the script auto-detects `cookies.txt`, `www.youtube.com_cookies.txt`, `youtube_cookies.txt`
+      - **Cookie validation**: the tool tests cookies against YouTube before starting any download. If cookies are expired or invalid, an error is shown immediately
   - If downloading fails due to a bot-detection block, the tool automatically retries blocked videos with browser cookies
+- **Auto-remove completed URLs**: each URL is removed from `videolinks.txt` immediately after a successful download, so interrupted sessions resume cleanly from where they left off
 - **JavaScript challenge solver** — uses Node.js + EJS remote component to decrypt YouTube stream URLs (required since 2025; without it only storyboard thumbnails are available)
 - **Clean download UI**:
   - Green progress bar with speed and ETA
@@ -129,7 +133,8 @@ YouTube increasingly blocks anonymous downloads. The tool handles this in two wa
 1. Export cookies from your browser using an extension:  
    *"Get cookies.txt LOCALLY"* (Chrome/Edge) or *"cookies.txt"* (Firefox)
 2. When the cookie prompt appears, pick **3 (Cookies from file)**
-3. Enter the path to the `.txt` **file** or just the **folder** containing it — the script auto-detects `cookies.txt`, `www.youtube.com_cookies.txt`, or `youtube_cookies.txt`
+3. Press `[Enter]` to auto-scan the script folder, **or** enter a custom path to the `.txt` file or a folder containing it
+4. The tool **validates** the cookies before starting — if they are expired you'll see a clear error message so you know to re-export
 
 > ⚠️ **Chrome rotates session tokens** every few hours as a security measure.  
 > If "Sign in to confirm" reappears, simply re-export fresh cookies.
@@ -178,6 +183,11 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v3.7.1 (2026-04-11)
+- **Cookie validation** — when using option 3 (cookies.txt), the tool now runs a quick lightweight test against YouTube before starting any real download; expired or invalid cookies are detected immediately with a clear error message
+- **Smarter cookie file UX** — option 3 now shows two choices: press `[Enter]` to auto-scan the script folder (the most common workflow) or type a custom path to a file or folder
+- **Auto-remove from videolinks.txt** — each URL is deleted from `videolinks.txt` immediately after a successful download; interrupted batch sessions resume from where they left off without re-downloading already completed videos
 
 ### v3.7 (2026-04-09)
 - **YouTube JS challenge fix** — added `remote_components: ejs:github` and `js_runtimes: node` to yt-dlp options. YouTube encrypts stream URLs via an `n`-parameter JS challenge; without a solver only storyboard thumbnails were visible. EJS solver script is downloaded from GitHub on first run and cached locally
