@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.7.1
+YouTube Channel Finder v3.8.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
-  Mode 2 — Parse channel (long / shorts classification)
-  Mode 3 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
+  Mode 2 — Download single video by URL (stats + download/thumbnail)
+  Mode 3 — Parse channel (long / shorts classification)
+  Mode 4 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
+  Mode 5 — Download thumbnails
 """
 
 import os
@@ -943,6 +945,86 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
     print(f"{C.G}All done → {out_dir}{C.E}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  MODE 2 — DOWNLOAD SINGLE VIDEO BY URL
+# ═══════════════════════════════════════════════════════════════════════
+
+def _print_video_stats(info: dict):
+    """Print a concise statistics block for a single video."""
+    print(f"\n{C.BO}─── Video Info ───{C.E}")
+    print(f"  {C.CN}Title   :{C.E} {info.get('title', '?')}")
+    print(f"  {C.CN}Channel :{C.E} {info.get('channel', info.get('uploader', '?'))}")
+    print(f"  {C.CN}Date    :{C.E} {info.get('upload_date', '?')}")
+    print(f"  {C.CN}Duration:{C.E} {info.get('duration_string', info.get('duration', '?'))}")
+    print(f"  {C.CN}Views   :{C.E} {info.get('view_count', '?')}")
+    print(f"  {C.CN}Likes   :{C.E} {info.get('like_count', '?')}")
+    print(f"  {C.CN}Comments:{C.E} {info.get('comment_count', '?')}")
+    print(f"  {C.CN}Res     :{C.E} {info.get('resolution', '?')}  FPS: {info.get('fps', '?')}")
+    cats = ', '.join(info.get('categories', []))
+    if cats:
+        print(f"  {C.CN}Category:{C.E} {cats}")
+    tags = info.get('tags', [])
+    if tags:
+        print(f"  {C.CN}Tags    :{C.E} {', '.join(tags[:10])}{'...' if len(tags) > 10 else ''}")
+    print()
+
+
+def mode_download_single(km: KeyManager):
+    """Download a single video by URL — shows stats then offers download / thumbnail options."""
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        print(f"{C.R}yt-dlp not installed. Run: pip install yt-dlp{C.E}")
+        return
+
+    url = input(f"\n{C.BO}Paste video URL: {C.E}").strip()
+    if not url:
+        return
+
+    # ── Fetch stats via yt-dlp (no download, no API quota used) ────────
+    print(f"  {C.CN}Fetching video info...{C.E}")
+    try:
+        with YoutubeDL({'quiet': True, 'no_warnings': True,
+                        'logger': _YtLogger(), 'skip_download': True,
+                        'js_runtimes': {'node': {}},
+                        'remote_components': ['ejs:github']}) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"{C.R}  Could not fetch info: {e}{C.E}")
+        info = None
+
+    if info:
+        _print_video_stats(info)
+    else:
+        print(f"{C.Y}  Could not load video stats (URL may be private/geo-blocked).{C.E}\n")
+
+    # ── Sub-menu ────────────────────────────────────────────────────────
+    while True:
+        print(f"{C.BO}─── What to do with this video? ───{C.E}")
+        print(f"  {C.CN}1.{C.E} Download video (MP4 / MP3 — quality selection, cookies, proxy)")
+        print(f"  {C.CN}2.{C.E} Download thumbnail (max resolution)")
+        print(f"  {C.CN}0.{C.E} Back to main menu")
+        ch = input(f"{C.CN}  > {C.E}").strip()
+
+        if ch == '1':
+            _download_urls([url], DOWNLOADS_DIR)
+            break
+        elif ch == '2':
+            # Extract video ID for thumbnail download
+            m = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
+            if not m:
+                print(f"{C.R}  Could not extract video ID from URL.{C.E}")
+                break
+            vid = m.group(1)
+            title = info.get('title', vid) if info else vid
+            print(f"{C.CN}Downloading thumbnail for: {title}{C.E}")
+            _download_single_thumbnail(vid, title)
+            print(f"{C.G}Done → {THUMBS_DIR}{C.E}")
+            break
+        elif ch == '0':
+            break
+
+
 def download_selected(results: list):
     """Let user pick which search results to download."""
     try:
@@ -1378,7 +1460,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.7.1         ║")
+    print("║       YouTube Channel Finder  v3.8.0         ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
@@ -1389,9 +1471,10 @@ def main():
     while True:
         print(f"\n{C.BO}═══ Main Menu ═══{C.E}")
         print(f"  {C.CN}1.{C.E} Search videos")
-        print(f"  {C.CN}2.{C.E} Parse channel (long / shorts)")
-        print(f"  {C.CN}3.{C.E} Download from videolinks.txt")
-        print(f"  {C.CN}4.{C.E} Download thumbnails")
+        print(f"  {C.CN}2.{C.E} Download single video by URL")
+        print(f"  {C.CN}3.{C.E} Parse channel (long / shorts)")
+        print(f"  {C.CN}4.{C.E} Download from videolinks.txt")
+        print(f"  {C.CN}5.{C.E} Download thumbnails")
         print(f"  {C.CN}0.{C.E} Exit")
 
         choice = input(f"{C.CN}  > {C.E}").strip()
@@ -1399,10 +1482,12 @@ def main():
         if choice == '1':
             mode_search(km)
         elif choice == '2':
-            mode_parse(km)
+            mode_download_single(km)
         elif choice == '3':
-            mode_download()
+            mode_parse(km)
         elif choice == '4':
+            mode_download()
+        elif choice == '5':
             mode_thumbnails(km)
         elif choice == '0':
             break

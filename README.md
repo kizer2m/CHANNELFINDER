@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.7.1
+# YouTube Channel Finder v3.8.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -24,7 +24,18 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
   - Download selected videos as MP4 with quality selection
   - View detailed channel analytics
 
-### 📋 Mode 2 — Parse Channel
+### 🔹 Mode 2 — Download Single Video by URL
+- Paste any YouTube video URL and get **instant statistics** before deciding what to do:
+  - Title, channel, upload date, duration
+  - View count, like count, comment count
+  - Resolution, FPS, categories, tags
+- After displaying stats, choose from a sub-menu:
+  1. **Download video** — full quality/cookie/proxy selection (same options as Mode 4)
+     - Downloads video as MP4 (or MP3 for audio) and **saves metadata to a `.txt` file**
+  2. **Download thumbnail** — downloads the max-resolution thumbnail to `thumbnails/`
+- Fetches stats via yt-dlp (no API quota used)
+
+### 📋 Mode 3 — Parse Channel
 - Accepts channel URL, `@handle`, or free-text search
 - Fetches **all** videos from a channel using the **uploads playlist** (`playlistItems` API)
   - No result cap — works correctly even for channels with **thousands** of videos
@@ -34,7 +45,7 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
   - `ChannelName_long.txt`
   - `ChannelName_shorts.txt`
 
-### ⬇️ Mode 3 — Batch Download
+### ⬇️ Mode 4 — Batch Download
 - Reads video URLs from `videolinks.txt` (one URL per line)
 - **Quality selection**: Best / 720p / 480p / Audio-only (MP3)
 - Re-encodes to MP4 automatically via FFmpeg
@@ -56,7 +67,7 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 - Saves full video metadata to a `.txt` file per video (title, channel, views, likes, tags, description, etc.)
 - Handles duplicate titles by appending `[videoId]` to filenames
 
-### 🖼️ Mode 4 — Download Thumbnails
+### 🖼️ Mode 5 — Download Thumbnails
 - **Single video**: paste a video URL → downloads max-resolution thumbnail
 - **Entire channel**: paste a channel URL or `@handle` → downloads all video thumbnails
 - Thumbnails saved as `Title [videoId].jpg` (max-res with fallback to HQ)
@@ -183,6 +194,16 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v3.8.0 (2026-04-12)
+- **New Mode 2 — Download single video by URL**:
+  - Paste any YouTube video URL to fetch instant statistics: title, channel, date, duration, views, likes, comments, resolution, categories, tags
+  - After stats, choose from a sub-menu:
+    - **Download video** — full quality/cookie selection (identical to batch download options); saves metadata `.txt` alongside the video
+    - **Download thumbnail** — downloads max-resolution thumbnail to `thumbnails/`
+  - Fetches info via yt-dlp (zero API quota consumed)
+- **Menu renumbered**: old Mode 2 (Parse channel) is now Mode 3, old Mode 3 (Batch download) is now Mode 4, old Mode 4 (Thumbnails) is now Mode 5
+- Version bump: `3.7.1` → `3.8.0`
 
 ### v3.7.1 (2026-04-11)
 - **Cookie validation** — when using option 3 (cookies.txt), the tool now runs a quick lightweight test against YouTube before starting any real download; expired or invalid cookies are detected immediately with a clear error message
