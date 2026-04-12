@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.8.0
+YouTube Channel Finder v3.9.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts classification)
@@ -384,10 +384,11 @@ def save_results(results: list, query: str):
 def _pick_quality() -> dict:
     """Ask user for download quality. Returns yt-dlp opts fragment."""
     print(f"\n{C.CN}Download quality:{C.E}")
-    print("  1 = Best video + audio (re-encode to MP4)")
-    print("  2 = 720p max (MP4)")
-    print("  3 = 480p max (MP4)")
+    print("  1 = 1080p (MP4)")
+    print("  2 = 720p (MP4)")
+    print("  3 = 480p (MP4)")
     print("  4 = Audio only (MP3)")
+    print("  5 = Ultra High (4K/8K)")
     q = input("  Choice [1]: ").strip()
 
     opts = {}
@@ -406,12 +407,17 @@ def _pick_quality() -> dict:
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }]
+    elif q == '5':
+        # Sentinel — actual format resolved per-URL after probing
+        opts['_quality_mode'] = 'ultra_high'
     else:
-        # Full fallback chain: adaptive DASH → any video+audio → combined → anything
-        opts['format'] = 'bestvideo+bestaudio/bestvideo*+bestaudio/best/worst'
+        # 1080p cap with full fallback chain
+        opts['format'] = ('bestvideo[height<=1080]+bestaudio'
+                          '/bestvideo*[height<=1080]+bestaudio'
+                          '/best[height<=1080]/best/worst')
 
-    # For video modes (not audio-only), re-encode / remux to MP4
-    if q != '4':
+    # For video modes (not audio-only and not ultra_high sentinel), add MP4 postprocessor
+    if q not in ('4', '5'):
         opts['merge_output_format'] = 'mp4'
         opts['postprocessors'] = opts.get('postprocessors', []) + [{
             'key': 'FFmpegVideoConvertor',
@@ -419,6 +425,58 @@ def _pick_quality() -> dict:
         }]
 
     return opts
+
+
+
+def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
+    """Return deduplicated descending list of heights >=2160 available for the URL."""
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        return []
+    probe_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'logger': _YtLogger(),
+        'js_runtimes': {'node': {}},
+        'remote_components': ['ejs:github'],
+    }
+    for k, v in cookie_opts.items():
+        if not k.startswith('_'):
+            probe_opts[k] = v
+    try:
+        with YoutubeDL(probe_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if not info:
+            return []
+        seen, result = set(), []
+        for f in info.get('formats', []):
+            h = f.get('height') or 0
+            if h >= 2160 and h not in seen:
+                seen.add(h)
+                result.append(h)
+        return sorted(result, reverse=True)
+    except Exception:
+        return []
+
+
+def _pick_uhd_resolution(available: list) -> str:
+    """Show available UHD resolutions, return yt-dlp format string or '' to go back."""
+    print(f"\n{C.G}Available Ultra HD resolutions:{C.E}")
+    for i, h in enumerate(available, 1):
+        label = '8K' if h >= 4320 else '4K'
+        print(f"  {C.CN}{i}.{C.E} {h}p ({label})")
+    print(f"  {C.CN}0.{C.E} Back to quality menu")
+    ch = input(f"{C.CN}  > {C.E}").strip()
+    if ch == '0':
+        return ''
+    try:
+        h = available[int(ch) - 1]
+        return (f'bestvideo[height<={h}]+bestaudio'
+                f'/bestvideo*[height<={h}]+bestaudio'
+                f'/best[height<={h}]/best/worst')
+    except (ValueError, IndexError):
+        return ''
 
 
 # Browsers supported by yt-dlp --cookies-from-browser
@@ -874,6 +932,56 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
     cookie_opts   = _pick_cookie_source()
     cookie_mode   = cookie_opts.get('_cookie_mode', 'none')
     browser_name  = cookie_opts.get('_browser', 'chrome')
+
+    # ── Ultra High (4K/8K) mode — probe + resolve format per URL ────────
+    if quality_opts.pop('_quality_mode', None) == 'ultra_high':
+        uhd_pp = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
+        failed_urls = []
+        try:
+            from yt_dlp import YoutubeDL
+            for i, url in enumerate(urls, 1):
+                # Resolve UHD format for this URL
+                while True:
+                    print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
+                    available = _probe_uhd_formats(url, cookie_opts)
+                    if not available:
+                        print(f"{C.Y}  No 4K/8K formats found for this video.{C.E}")
+                        print(f"  {C.CN}1.{C.E} Skip (back to previous menu)")
+                        print(f"  {C.CN}2.{C.E} Back to main menu")
+                        ch = input(f"{C.CN}  > {C.E}").strip()
+                        if ch == '2':
+                            return
+                        break  # skip this URL
+                    fmt = _pick_uhd_resolution(available)
+                    if fmt == '':  # user chose 'back' in the resolution picker
+                        continue  # re-prompt probing (same URL)
+                    # Build per-URL opts
+                    url_quality = {
+                        'format': fmt,
+                        'merge_output_format': 'mp4',
+                        'postprocessors': uhd_pp,
+                    }
+                    url_opts = _build_ydl_opts(out_dir, url_quality, cookie_opts)
+                    try:
+                        with YoutubeDL(url_opts) as ydl:
+                            try:
+                                _download_one(ydl, url, i, len(urls), out_dir,
+                                              from_videolinks=from_videolinks)
+                            except Exception as e:
+                                err_msg = str(e)
+                                if _is_cookie_db_error(err_msg):
+                                    _print_cookie_db_help(browser_name)
+                                    return
+                                print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+                                if _is_bot_error(err_msg) and cookie_mode == 'none':
+                                    failed_urls.append(url)
+                    except Exception as e:
+                        print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
+                    break  # move to next URL
+        finally:
+            _cleanup_tmp_cookie_db(cookie_opts)
+        print(f"{C.G}All done → {out_dir}{C.E}")
+        return
 
     base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
 

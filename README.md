@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.8.0
+# YouTube Channel Finder v3.9.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -47,7 +47,12 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 
 ### ⬇️ Mode 4 — Batch Download
 - Reads video URLs from `videolinks.txt` (one URL per line)
-- **Quality selection**: Best / 720p / 480p / Audio-only (MP3)
+- **Quality selection** (5 tiers):
+  - `1` — **1080p** (MP4)
+  - `2` — **720p** (MP4)
+  - `3` — **480p** (MP4)
+  - `4` — **Audio only** (MP3, 192 kbps)
+  - `5` — **Ultra High (4K/8K)** — probes the video for available resolutions ≥ 2160p; lets you pick exact height (2160p 4K, 4320p 8K, etc.); shows a "not available" message with skip/exit options if the video has no UHD stream
 - Re-encodes to MP4 automatically via FFmpeg
 - **🍪 Cookie / Authentication support**:
   - Choose how to handle YouTube authentication before every download:
@@ -194,6 +199,19 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v3.9.0 (2026-04-12)
+- **Quality menu overhaul**:
+  - Option `1` renamed from "Best video + audio" → **1080p (MP4)** with explicit `height<=1080` cap
+  - "max" label removed from 720p / 480p options for clarity
+  - New option `5` — **Ultra High (4K/8K)**:
+    - Probes the selected video for streams with `height >= 2160` using yt-dlp (no download)
+    - If UHD streams are found, displays available resolutions (e.g. 2160p 4K, 4320p 8K) and lets the user pick one
+    - If no UHD streams exist, shows a message and offers: skip URL / back to main menu
+    - After resolution selection the full cookie / proxy / download pipeline runs identically to all other quality modes
+    - New helpers: `_probe_uhd_formats()`, `_pick_uhd_resolution()`
+- **Bug fix**: Mode 2 info-fetch now passes `js_runtimes` and `remote_components` to its `YoutubeDL` instance, eliminating the "No supported JavaScript runtime" warning on first info request
+- Version bump: `3.8.0` → `3.9.0`
 
 ### v3.8.0 (2026-04-12)
 - **New Mode 2 — Download single video by URL**:
