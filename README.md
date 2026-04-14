@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.0.0
+# YouTube Channel Finder v4.1.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -101,6 +101,16 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 
 ### 🔄 Auto-Update
 - Checks for `yt-dlp` updates on every launch and upgrades automatically
+
+### 🗂️ Startup Environment Check *(new in v4.1.0)*
+- Runs automatically after the update check on every launch
+- Verifies all required items exist; **creates anything missing** and reports it:
+  - `thumbnails/`, `downloads/`, `parsed/` — folders created if absent
+  - `videolinks.txt` — created with a comment template if absent
+  - `find.txt` — created empty if absent
+  - `api_keys.txt` — if missing, creates a commented template **and shows a warning** to add real keys
+- **Silent on clean installs**: if everything already exists, no output is shown
+- Each created item shown as `Created` (yellow); already-present items shown as `OK` (green) only when the block appears
 
 ---
 
@@ -211,6 +221,15 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.1.0 (2026-04-14)
+- **Startup environment check** — new `ensure_environment()` function runs after `check_updates()` on every launch:
+  - Creates missing directories: `thumbnails/`, `downloads/`, `parsed/`
+  - Creates `videolinks.txt` with comment template if absent
+  - Creates `find.txt` empty if absent
+  - Creates `api_keys.txt` with commented example if absent + warns user to add real keys
+  - Silent if all items already exist; reports only what was created
+- Version bump: `4.0.0` → `4.1.0`
 
 ### v4.0.0 (2026-04-14)
 - **Mode 3 download menu** — after channel parsing a multi-level menu appears:

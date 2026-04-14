@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.0.0
+YouTube Channel Finder v4.1.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -35,6 +35,68 @@ THUMBS_DIR    = os.path.join(SCRIPT_DIR, 'thumbnails')
 DOWNLOADS_DIR = os.path.join(SCRIPT_DIR, 'downloads')
 PARSED_DIR    = os.path.join(SCRIPT_DIR, 'parsed')
 VIDEOLINKS    = os.path.join(SCRIPT_DIR, 'videolinks.txt')
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ENVIRONMENT CHECK
+# ═══════════════════════════════════════════════════════════════════════
+
+def ensure_environment():
+    """
+    Check that all folders and support files required by the script exist.
+    Creates anything that is missing and reports what was created.
+    Called once on startup, right after the update check.
+    """
+    created = []
+    already_ok = []
+
+    # ── Directories ──────────────────────────────────────────────────────
+    required_dirs = [
+        (THUMBS_DIR,    'thumbnails/'),
+        (DOWNLOADS_DIR, 'downloads/'),
+        (PARSED_DIR,    'parsed/'),
+    ]
+    for path, label in required_dirs:
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+            created.append(label)
+        else:
+            already_ok.append(label)
+
+    # ── videolinks.txt — created with a comment template if missing ──────
+    if not os.path.isfile(VIDEOLINKS):
+        with open(VIDEOLINKS, 'w', encoding='utf-8') as f:
+            f.write('# Put one YouTube video URL per line\n')
+        created.append('videolinks.txt')
+    else:
+        already_ok.append('videolinks.txt')
+
+    # ── find.txt — created empty if missing ─────────────────────────────
+    if not os.path.isfile(OUTPUT_FILE):
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            pass  # empty file — results are appended by mode_search()
+        created.append('find.txt')
+    else:
+        already_ok.append('find.txt')
+
+    # ── api_keys.txt — critical; create template and warn if missing ─────
+    if not os.path.isfile(API_KEYS_FILE):
+        with open(API_KEYS_FILE, 'w', encoding='utf-8') as f:
+            f.write('# Paste your YouTube Data API v3 key(s) here, one per line\n')
+            f.write('# Example:\n')
+            f.write('# AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n')
+        created.append('api_keys.txt  ← TEMPLATE (add real keys!)')
+
+    # ── Report ────────────────────────────────────────────────────────────
+    if created:
+        print(f"{C.CN}─── Environment check ───{C.E}")
+        for item in created:
+            print(f"  {C.Y}Created :{C.E} {item}")
+        if already_ok:
+            for item in already_ok:
+                print(f"  {C.G}OK      :{C.E} {item}")
+        print()
+    # If everything was already in place, stay silent (clean startup)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1692,11 +1754,12 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v4.0.0         ║")
+    print("║       YouTube Channel Finder  v4.1.0         ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
     check_updates()
+    ensure_environment()
     km = KeyManager(API_KEYS_FILE)
     check_key_quotas(km)
 
