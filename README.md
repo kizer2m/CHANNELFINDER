@@ -1,4 +1,4 @@
-# YouTube Channel Finder v3.9.0
+# YouTube Channel Finder v4.0.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -44,6 +44,18 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 - Saves results to `parsed/` folder as separate files with links only:
   - `ChannelName_long.txt`
   - `ChannelName_shorts.txt`
+- **After parsing, a multi-level download menu appears:**
+  1. **Download long videos** — opens sub-menu:
+     - Download video only (quality/cookies/proxy selection, identical to Mode 4)
+     - Download video + thumbnails (thumbnails saved to `thumbnails/ChannelName_long/`)
+     - Back
+  2. **Download shorts** — same sub-menu for shorts
+  3. **Download long + shorts** — same sub-menu for all videos combined
+  4. **Back to main menu**
+- URLs are **copied to `videolinks.txt`** before download (originals in `_long.txt`/`_shorts.txt` are **never deleted**); already-present URLs are skipped to avoid duplicates
+- Each successfully downloaded URL is **removed from `videolinks.txt`** so interrupted sessions resume cleanly
+- Thumbnails downloaded in **max-resolution** (fallback to HQ), one subfolder per video type
+- Full metadata `.txt` file saved per downloaded video (same as Mode 4)
 
 ### ⬇️ Mode 4 — Batch Download
 - Reads video URLs from `videolinks.txt` (one URL per line)
@@ -199,6 +211,19 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.0.0 (2026-04-14)
+- **Mode 3 download menu** — after channel parsing a multi-level menu appears:
+  - **Level 1**: choose what to download — long videos / shorts / long + shorts
+  - **Level 2** (inner sub-menu for each selection):
+    - `1` — Download video (full quality/cookie/proxy pipeline, identical to Mode 4)
+    - `2` — Download video **and** thumbnails (max-res, saved to `thumbnails/<ChannelName_type>/`)
+    - `0` — Back to video-type menu
+  - All download options apply identically across all three video-type selections
+- **URL copying logic**: selected URLs are appended to `videolinks.txt` before download; originals in `_long.txt` / `_shorts.txt` files are preserved; duplicate URLs are skipped automatically
+- **Thumbnail batch download**: new helper `_download_thumbnails_for_urls()` downloads max-res thumbnails (fallback to HQ) into `thumbnails/<channel_subdir>/` subfolders
+- **New helpers**: `_copy_urls_to_videolinks()`, `_download_thumbnails_for_urls()`, `_parse_download_submenu()`
+- Version bump: `3.9.0` → `4.0.0`
 
 ### v3.9.0 (2026-04-12)
 - **Quality menu overhaul**:
