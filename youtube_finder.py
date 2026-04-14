@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v3.9.0
+YouTube Channel Finder v4.0.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
-  Mode 3 — Parse channel (long / shorts classification)
+  Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
   Mode 4 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
   Mode 5 — Download thumbnails
 """
@@ -1378,8 +1378,99 @@ def classify_videos(km: KeyManager, videos: list):
     return longs, shorts
 
 
+def _copy_urls_to_videolinks(urls: list):
+    """
+    Append urls to videolinks.txt WITHOUT removing originals from parsed files.
+    Skips lines already present in videolinks.txt to avoid duplicates.
+    """
+    os.makedirs(os.path.dirname(VIDEOLINKS) or '.', exist_ok=True)
+    # Read existing URLs in videolinks.txt
+    existing = set()
+    if os.path.isfile(VIDEOLINKS):
+        with open(VIDEOLINKS, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith('#'):
+                    existing.add(s)
+
+    new_urls = [u for u in urls if u not in existing]
+    if not new_urls:
+        print(f"  {C.Y}All URLs already present in videolinks.txt — nothing added.{C.E}")
+        return
+
+    with open(VIDEOLINKS, 'a', encoding='utf-8') as f:
+        for u in new_urls:
+            f.write(u + '\n')
+    print(f"  {C.G}Added {len(new_urls)} URL(s) to videolinks.txt{C.E}")
+
+
+def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
+    """
+    Download max-res thumbnails for a list of YouTube video URLs.
+    Saves to thumbnails/<channel_subdir>/ folder.
+    """
+    thumb_dir = os.path.join(THUMBS_DIR, channel_subdir)
+    os.makedirs(thumb_dir, exist_ok=True)
+    total = len(urls)
+    ok = 0
+    for i, url in enumerate(urls, 1):
+        m = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
+        if not m:
+            print(f"  {C.Y}⚠  Cannot extract video ID from: {url}{C.E}")
+            continue
+        vid = m.group(1)
+        fname = os.path.join(thumb_dir, f"{vid}.jpg")
+        img_url = f"https://img.youtube.com/vi/{vid}/maxresdefault.jpg"
+        try:
+            urllib.request.urlretrieve(img_url, fname)
+            if os.path.getsize(fname) < 5000:
+                img_url = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+                urllib.request.urlretrieve(img_url, fname)
+            ok += 1
+            print(f"  {C.G}[{i}/{total}] ✓{C.E} {vid}")
+        except Exception as e:
+            print(f"  {C.R}[{i}/{total}] ✗ {vid}: {e}{C.E}")
+    print(f"  {C.G}Thumbnails done: {ok}/{total} → {thumb_dir}{C.E}")
+
+
+def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
+    """
+    Inner submenu shown after video-type selection.
+    label     — human-readable name, e.g. 'Long videos' or 'Shorts'
+    channel_subdir — subfolder name for thumbnails
+    """
+    while True:
+        print(f"\n{C.BO}─── Download: {C.CN}{label}{C.E}{C.BO} ({len(urls)} videos) ───{C.E}")
+        print(f"  {C.CN}1.{C.E} Download video")
+        print(f"  {C.CN}2.{C.E} Download video + thumbnails")
+        print(f"  {C.CN}0.{C.E} Back")
+        ch = input(f"{C.CN}  > {C.E}").strip()
+
+        if ch == '0':
+            return
+
+        if ch not in ('1', '2'):
+            print(f"{C.Y}Invalid choice.{C.E}")
+            continue
+
+        # Copy URLs into videolinks.txt (without removing them from parsed files)
+        print(f"\n{C.CN}Copying {len(urls)} URL(s) to videolinks.txt...{C.E}")
+        _copy_urls_to_videolinks(urls)
+
+        # Re-read only the URLs we just added (they may have been filtered for dups)
+        # We pass them directly — simpler and avoids re-reading the file
+        _download_urls(urls, DOWNLOADS_DIR, from_videolinks=True)
+
+        # If user chose option 2 — also download thumbnails
+        if ch == '2':
+            print(f"\n{C.CN}Downloading thumbnails for {label}...{C.E}")
+            _download_thumbnails_for_urls(urls, channel_subdir)
+
+        return
+
+
 def mode_parse(km: KeyManager):
-    """Channel parsing mode."""
+    """Channel parsing mode with post-parse download menu."""
     print(f"\n{C.BO}─── Channel Parser ───{C.E}")
     print("Paste a channel URL or @handle (e.g. @MrBeast)")
     user_in = input(f"{C.CN}  Channel: {C.E}").strip()
@@ -1409,23 +1500,56 @@ def mode_parse(km: KeyManager):
     print(f"  {C.G}Long videos (>60 s):  {len(longs)}{C.E}")
     print(f"  {C.Y}Shorts     (≤60 s):  {len(shorts)}{C.E}")
 
-    # Save to parsed/
+    # ── Save to parsed/ ─────────────────────────────────────────────────
     os.makedirs(PARSED_DIR, exist_ok=True)
     safe_name = safe_filename(ctitle)
 
     long_path  = os.path.join(PARSED_DIR, f"{safe_name}_long.txt")
     short_path = os.path.join(PARSED_DIR, f"{safe_name}_shorts.txt")
 
+    long_urls  = [f"https://www.youtube.com/watch?v={v['videoId']}" for v in longs]
+    short_urls = [f"https://www.youtube.com/watch?v={v['videoId']}" for v in shorts]
+
     with open(long_path, 'w', encoding='utf-8') as f:
-        for v in longs:
-            f.write(f"https://www.youtube.com/watch?v={v['videoId']}\n")
+        for u in long_urls:
+            f.write(u + '\n')
 
     with open(short_path, 'w', encoding='utf-8') as f:
-        for v in shorts:
-            f.write(f"https://www.youtube.com/watch?v={v['videoId']}\n")
+        for u in short_urls:
+            f.write(u + '\n')
 
     print(f"{C.G}Saved → {long_path}{C.E}")
     print(f"{C.G}Saved → {short_path}{C.E}")
+
+    # ── Post-parse download menu ─────────────────────────────────────────
+    while True:
+        print(f"\n{C.BO}─── What to download? ───{C.E}")
+        print(f"  {C.CN}1.{C.E} Download long videos  ({C.G}{len(longs)}{C.E} videos)")
+        print(f"  {C.CN}2.{C.E} Download shorts        ({C.Y}{len(shorts)}{C.E} videos)")
+        print(f"  {C.CN}3.{C.E} Download long + shorts ({C.G}{len(longs) + len(shorts)}{C.E} videos)")
+        print(f"  {C.CN}0.{C.E} Back to main menu")
+        ch = input(f"{C.CN}  > {C.E}").strip()
+
+        if ch == '0':
+            return
+        elif ch == '1':
+            if not long_urls:
+                print(f"{C.Y}No long videos found on this channel.{C.E}")
+                continue
+            _parse_download_submenu(long_urls, 'Long videos', f"{safe_name}_long")
+        elif ch == '2':
+            if not short_urls:
+                print(f"{C.Y}No shorts found on this channel.{C.E}")
+                continue
+            _parse_download_submenu(short_urls, 'Shorts', f"{safe_name}_shorts")
+        elif ch == '3':
+            all_urls = long_urls + short_urls
+            if not all_urls:
+                print(f"{C.Y}No videos found on this channel.{C.E}")
+                continue
+            _parse_download_submenu(all_urls, 'Long + Shorts', f"{safe_name}_all")
+        else:
+            print(f"{C.Y}Invalid choice.{C.E}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1568,7 +1692,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v3.8.0         ║")
+    print("║       YouTube Channel Finder  v4.0.0         ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
