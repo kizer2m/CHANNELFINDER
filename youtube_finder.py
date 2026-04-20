@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.2.0
+YouTube Channel Finder v4.3.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -90,12 +90,12 @@ def ensure_environment():
 
     # ── Report ────────────────────────────────────────────────────────────
     if created:
-        print(f"{C.CN}─── Environment check ───{C.E}")
+        _ui_header('Environment Check', C.CN)
         for item in created:
-            print(f"  {C.Y}Created :{C.E} {item}")
+            _ui_status('◆', item, C.Y)
         if already_ok:
             for item in already_ok:
-                print(f"  {C.G}OK      :{C.E} {item}")
+                _ui_status('✓', item, C.G)
         print()
     # If everything was already in place, stay silent (clean startup)
 
@@ -106,14 +106,68 @@ def ensure_environment():
 
 class C:
     """ANSI colour shortcuts."""
-    H  = '\033[95m'
-    B  = '\033[94m'
-    CN = '\033[96m'
-    G  = '\033[92m'
-    Y  = '\033[93m'
-    R  = '\033[91m'
-    BO = '\033[1m'
-    E  = '\033[0m'
+    H  = '\033[95m'       # Magenta / Header
+    B  = '\033[94m'       # Blue
+    CN = '\033[96m'       # Cyan
+    G  = '\033[92m'       # Green
+    Y  = '\033[93m'       # Yellow
+    R  = '\033[91m'       # Red
+    BO = '\033[1m'        # Bold
+    DM = '\033[2m'        # Dim
+    IT = '\033[3m'        # Italic
+    UL = '\033[4m'        # Underline
+    W  = '\033[97m'       # White (bright)
+    DG = '\033[90m'       # Dark gray
+    E  = '\033[0m'        # Reset
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  UI DRAWING HELPERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _ui_banner(title: str, width: int = 52, color: str = C.H):
+    """Print a double-line boxed banner for major sections."""
+    inner = width - 4
+    pad_text = title.center(inner)
+    print(f"{color}{C.BO}")
+    print(f"  ╔{'═' * inner}╗")
+    print(f"  ║{pad_text}║")
+    print(f"  ╚{'═' * inner}╝")
+    print(f"{C.E}")
+
+
+def _ui_header(title: str, color: str = C.CN):
+    """Print a section header with decorative line."""
+    print(f"\n  {color}{C.BO}{'─' * 3} {title} {'─' * max(1, 40 - len(title))}{C.E}")
+
+
+def _ui_separator(color: str = C.DG):
+    """Print a thin separator line."""
+    print(f"  {color}{'─' * 46}{C.E}")
+
+
+def _ui_menu_item(key: str, label: str, accent: str = C.CN, extra: str = ''):
+    """Print a styled menu item with consistent formatting."""
+    dot = f"{C.DG}│{C.E}"
+    num = f"  {dot} {accent}{C.BO}{key}.{C.E}"
+    ex = f"  {C.DM}{extra}{C.E}" if extra else ''
+    print(f"{num} {C.W}{label}{C.E}{ex}")
+
+
+def _ui_menu_back(key: str = '0', label: str = 'Back'):
+    """Print a styled 'Back' / 'Exit' menu item."""
+    dot = f"{C.DG}│{C.E}"
+    print(f"  {dot} {C.DG}{key}. {label}{C.E}")
+
+
+def _ui_prompt() -> str:
+    """Print a styled input prompt and return user input."""
+    return input(f"  {C.CN}›{C.E} ").strip()
+
+
+def _ui_status(icon: str, message: str, color: str = C.G):
+    """Print a status line with icon."""
+    print(f"  {color}{icon}{C.E}  {message}")
 
 
 def safe_filename(name: str) -> str:
@@ -136,18 +190,25 @@ def parse_iso_duration(iso: str) -> int:
 # ═══════════════════════════════════════════════════════════════════════
 
 def check_updates():
-    print(f"{C.CN}Checking for yt-dlp updates...{C.E}")
+    print(f"  {C.CN}{C.BO}⟳{C.E}  {C.W}Checking for yt-dlp updates...{C.E}", end='', flush=True)
     try:
         result = subprocess.run(
             [sys.executable, '-m', 'pip', 'install', '--upgrade', 'yt-dlp'],
             capture_output=True, text=True, timeout=60,
         )
         if 'Successfully installed' in result.stdout:
-            print(f"{C.G}yt-dlp updated!{C.E}")
+            # Extract the new version from pip output
+            ver = ''
+            for word in result.stdout.split():
+                if 'yt' in word.lower() and '-' in word:
+                    ver = word
+                    break
+            print(f"\r  {C.G}{C.BO}✓{C.E}  {C.G}yt-dlp updated{C.E}" +
+                  (f" {C.DM}({ver}){C.E}" if ver else '') + '          ')
         else:
-            print(f"{C.G}yt-dlp is already up to date.{C.E}")
+            print(f"\r  {C.G}{C.BO}✓{C.E}  {C.G}yt-dlp is up to date{C.E}          ")
     except Exception as e:
-        print(f"{C.Y}Could not check yt-dlp updates: {e}{C.E}")
+        print(f"\r  {C.Y}{C.BO}⚠{C.E}  {C.Y}Could not check updates: {e}{C.E}          ")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -158,7 +219,7 @@ class KeyManager:
     def __init__(self, path: str):
         self.keys = self._load(path)
         self.idx  = 0
-        print(f"{C.G}Loaded {len(self.keys)} API key(s){C.E}")
+        print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Loaded {len(self.keys)} API key(s){C.E}")
 
     def _load(self, path: str):
         try:
@@ -182,31 +243,31 @@ class KeyManager:
 
 def check_key_quotas(km: KeyManager):
     """Test each API key with a lightweight call and show status."""
-    print(f"\n{C.CN}─── API Key Quota Status ───{C.E}")
+    _ui_header('API Key Status', C.CN)
     first_valid = None
     for i, api_key in enumerate(km.keys):
         try:
             yt = build('youtube', 'v3', developerKey=api_key)
             yt.search().list(part="id", q="test", maxResults=1).execute()
-            status = f"{C.G}✓ Active{C.E}"
+            status = f"{C.G}{C.BO}✓{C.E} {C.G}Active{C.E}"
             if first_valid is None:
                 first_valid = i
         except HttpError as e:
             if e.resp.status in (403, 429):
-                status = f"{C.R}✗ Quota exhausted{C.E}"
+                status = f"{C.R}{C.BO}✗{C.E} {C.R}Quota exhausted{C.E}"
             elif e.resp.status == 400:
-                status = f"{C.R}✗ Invalid key{C.E}"
+                status = f"{C.R}{C.BO}✗{C.E} {C.R}Invalid key{C.E}"
             else:
                 status = f"{C.Y}? HTTP {e.resp.status}{C.E}"
         except Exception as e:
             status = f"{C.Y}? Error: {e}{C.E}"
-        print(f"  Key #{i+1} (...{api_key[-6:]}): {status}")
+        print(f"  {C.DG}│{C.E} Key #{i+1} {C.DM}(...{api_key[-6:]}){C.E}  {status}")
     
     if first_valid is not None:
         km.idx = first_valid
-        print(f"{C.G}Using key #{first_valid + 1} as starting key.{C.E}")
+        print(f"  {C.G}{C.BO}→{C.E} {C.W}Using key #{first_valid + 1} as starting key{C.E}")
     else:
-        print(f"{C.R}WARNING: No active keys found! API calls will fail.{C.E}")
+        print(f"  {C.R}{C.BO}⚠{C.E} {C.R}No active keys found! API calls will fail.{C.E}")
     print()
 
 
@@ -247,16 +308,22 @@ def api_call(km: KeyManager, build_fn):
 
 def ask_filters() -> dict:
     """Prompt user for advanced search filters."""
-    print(f"\n{C.CN}─── Filters (Enter to skip) ───{C.E}")
+    _ui_header('Filters', C.B)
+    print(f"  {C.DM}Press Enter to skip any filter{C.E}\n")
 
-    d = input("  Duration  1=any 2=short(<4m) 3=medium(4-20m) 4=long(>20m) [1]: ").strip()
+    print(f"  {C.B}{C.BO}Duration:{C.E}")
+    print(f"  {C.DG}│{C.E} {C.W}1{C.E} = any   {C.W}2{C.E} = short (<4m)   {C.W}3{C.E} = medium (4-20m)   {C.W}4{C.E} = long (>20m)")
+    d = input(f"  {C.CN}›{C.E} ").strip()
     duration = {'2': 'short', '3': 'medium', '4': 'long'}.get(d, 'any')
 
-    df = input("  Quality   1=any 2=SD 3=HD [1]: ").strip()
+    print(f"  {C.B}{C.BO}Quality:{C.E}")
+    print(f"  {C.DG}│{C.E} {C.W}1{C.E} = any   {C.W}2{C.E} = SD   {C.W}3{C.E} = HD")
+    df = input(f"  {C.CN}›{C.E} ").strip()
     definition = {'2': 'standard', '3': 'high'}.get(df, 'any')
 
-    print("  Date      1=any 2=hour 3=today 4=week 5=month 6=year")
-    ud = input("  Choice [1]: ").strip()
+    print(f"  {C.B}{C.BO}Date range:{C.E}")
+    print(f"  {C.DG}│{C.E} {C.W}1{C.E} = any  {C.W}2{C.E} = hour  {C.W}3{C.E} = today  {C.W}4{C.E} = week  {C.W}5{C.E} = month  {C.W}6{C.E} = year")
+    ud = input(f"  {C.CN}›{C.E} ").strip()
     now = datetime.utcnow()
     pub_after = None
     deltas = {
@@ -269,9 +336,9 @@ def ask_filters() -> dict:
     if ud in deltas:
         pub_after = (now - deltas[ud]).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    lang = input("  Language code (ru/en/uk/ja/ar/...) []: ").strip() or None
+    lang = input(f"  {C.B}{C.BO}Language{C.E} {C.DM}(ru/en/uk/ja/ar/...){C.E}: ").strip() or None
 
-    ps = input("  Results per page (how many to show at a time) [25]: ").strip()
+    ps = input(f"  {C.B}{C.BO}Results per page{C.E} {C.DM}[25]{C.E}: ").strip()
     try:
         page_size = min(max(int(ps), 1), 50)
     except ValueError:
@@ -446,13 +513,13 @@ def save_results(results: list, query: str):
 
 def _pick_quality() -> dict:
     """Ask user for download quality. Returns yt-dlp opts fragment."""
-    print(f"\n{C.CN}Download quality:{C.E}")
-    print("  1 = 1080p (MP4)")
-    print("  2 = 720p (MP4)")
-    print("  3 = 480p (MP4)")
-    print("  4 = Audio only (MP3)")
-    print("  5 = Ultra High (4K/8K)")
-    q = input("  Choice [1]: ").strip()
+    _ui_header('Download Quality', C.G)
+    _ui_menu_item('1', '1080p', C.G, 'MP4')
+    _ui_menu_item('2', '720p', C.CN, 'MP4')
+    _ui_menu_item('3', '480p', C.CN, 'MP4')
+    _ui_menu_item('4', 'Audio only', C.Y, 'MP3 192kbps')
+    _ui_menu_item('5', 'Ultra High', C.H, '4K / 8K')
+    q = _ui_prompt()
 
     opts = {}
     if q == '2':
@@ -525,12 +592,12 @@ def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
 
 def _pick_uhd_resolution(available: list) -> str:
     """Show available UHD resolutions, return yt-dlp format string or '' to go back."""
-    print(f"\n{C.G}Available Ultra HD resolutions:{C.E}")
+    print(f"\n  {C.G}{C.BO}Available Ultra HD resolutions:{C.E}")
     for i, h in enumerate(available, 1):
         label = '8K' if h >= 4320 else '4K'
-        print(f"  {C.CN}{i}.{C.E} {h}p ({label})")
-    print(f"  {C.CN}0.{C.E} Back to quality menu")
-    ch = input(f"{C.CN}  > {C.E}").strip()
+        _ui_menu_item(str(i), f"{h}p", C.H, label)
+    _ui_menu_back('0', 'Back to quality menu')
+    ch = _ui_prompt()
     if ch == '0':
         return ''
     try:
@@ -673,21 +740,20 @@ def _pick_cookie_source() -> dict:
     Returns a dict of yt-dlp options to merge, plus a special key
     '_cookie_mode' = 'none' | 'browser' | 'file' for retry logic.
     """
-    print(f"\n{C.CN}─── Cookies / Authentication ───{C.E}")
-    print("  YouTube may block downloads without authentication.")
-    print(f"  {C.Y}1.{C.E} No cookies (try without authentication)")
-    print(f"  {C.Y}2.{C.E} Use cookies from browser")
-    print(f"      {C.Y}⚠  Chrome 127+ blocks cookie extraction (App-Bound Encryption).{C.E}")
-    print(f"         Use Firefox or Edge, or export via option 3.")
-    print(f"  {C.Y}3.{C.E} Use cookies from a .txt file {C.G}← most reliable{C.E}")
-    print(f"      Export via 'Get cookies.txt LOCALLY' (Chrome/Edge) or 'cookies.txt' (Firefox)")
-    ch = input(f"  Choice [1]: ").strip()
+    _ui_header('Cookies / Authentication', C.Y)
+    print(f"  {C.DM}YouTube may block downloads without authentication.{C.E}\n")
+    _ui_menu_item('1', 'No cookies', C.CN, 'try without auth')
+    _ui_menu_item('2', 'Use cookies from browser', C.CN)
+    print(f"      {C.Y}⚠  Chrome 127+ blocks extraction (App-Bound Encryption){C.E}")
+    _ui_menu_item('3', 'Use cookies from a .txt file', C.G, '← most reliable')
+    print(f"      {C.DM}Export via \'Get cookies.txt LOCALLY\' (Chrome) or \'cookies.txt\' (Firefox){C.E}")
+    ch = _ui_prompt()
 
     if ch == '2':
-        print(f"\n  {C.CN}Select browser:{C.E}")
+        print(f"\n  {C.CN}{C.BO}Select browser:{C.E}")
         for k, v in _BROWSERS.items():
-            print(f"    {k}. {v.capitalize()}")
-        bch = input("    Choice [1]: ").strip()
+            _ui_menu_item(k, v.capitalize(), C.CN)
+        bch = _ui_prompt()
         browser = _BROWSERS.get(bch, 'chrome')
         print(f"  {C.G}Will use cookies from: {browser}{C.E}")
 
@@ -703,10 +769,10 @@ def _pick_cookie_source() -> dict:
 
     if ch == '3':
         # ── Option 3: cookies.txt file ─────────────────────────────────
-        print(f"\n  {C.CN}Cookie file selection:{C.E}")
-        print(f"  {C.Y}[Enter]{C.E} — scan current script folder for cookies.txt automatically")
-        print(f"  {C.Y}[Path] {C.E} — type a custom path to a file or folder, then press Enter")
-        raw = input("  Path (or Enter to scan script folder): ").strip().strip('"')
+        print(f"\n  {C.CN}{C.BO}Cookie file selection:{C.E}")
+        print(f"  {C.DG}│{C.E} {C.W}[Enter]{C.E} — scan current folder for cookies.txt")
+        print(f"  {C.DG}│{C.E} {C.W}[Path] {C.E} — type custom path to file or folder")
+        raw = input(f"  {C.CN}›{C.E} ").strip().strip('"')
 
         if not raw:
             # Auto-scan the folder where the script lives
@@ -1008,10 +1074,10 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                     print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
                     available = _probe_uhd_formats(url, cookie_opts)
                     if not available:
-                        print(f"{C.Y}  No 4K/8K formats found for this video.{C.E}")
-                        print(f"  {C.CN}1.{C.E} Skip (back to previous menu)")
-                        print(f"  {C.CN}2.{C.E} Back to main menu")
-                        ch = input(f"{C.CN}  > {C.E}").strip()
+                        print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
+                        _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
+                        _ui_menu_item('2', 'Back to main menu', C.DG)
+                        ch = _ui_prompt()
                         if ch == '2':
                             return
                         break  # skip this URL
@@ -1079,11 +1145,10 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
     # ── Auto-retry with browser cookies ────────────────────────────────
     if failed_urls:
-        print(f"\n{C.Y}─── Retrying {len(failed_urls)} blocked video(s) with browser cookies ───{C.E}")
-        print(f"  {C.CN}Select browser for cookies:{C.E}")
+        _ui_header(f'Retrying {len(failed_urls)} blocked video(s) with browser cookies', C.Y)
         for k, v in _BROWSERS.items():
-            print(f"    {k}. {v.capitalize()}")
-        bch = input("    Choice [1 = Chrome]: ").strip()
+            _ui_menu_item(k, v.capitalize(), C.CN)
+        bch = _ui_prompt()
         browser = _BROWSERS.get(bch, 'chrome')
 
         # Try to pre-copy the cookie DB before yt-dlp touches it
@@ -1122,21 +1187,22 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
 def _print_video_stats(info: dict):
     """Print a concise statistics block for a single video."""
-    print(f"\n{C.BO}─── Video Info ───{C.E}")
-    print(f"  {C.CN}Title   :{C.E} {info.get('title', '?')}")
-    print(f"  {C.CN}Channel :{C.E} {info.get('channel', info.get('uploader', '?'))}")
-    print(f"  {C.CN}Date    :{C.E} {info.get('upload_date', '?')}")
-    print(f"  {C.CN}Duration:{C.E} {info.get('duration_string', info.get('duration', '?'))}")
-    print(f"  {C.CN}Views   :{C.E} {info.get('view_count', '?')}")
-    print(f"  {C.CN}Likes   :{C.E} {info.get('like_count', '?')}")
-    print(f"  {C.CN}Comments:{C.E} {info.get('comment_count', '?')}")
-    print(f"  {C.CN}Res     :{C.E} {info.get('resolution', '?')}  FPS: {info.get('fps', '?')}")
+    _ui_header('Video Info', C.CN)
+    print(f"  {C.DG}│{C.E} {C.CN}Title   :{C.E} {C.W}{info.get('title', '?')}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.CN}Channel :{C.E} {info.get('channel', info.get('uploader', '?'))}")
+    print(f"  {C.DG}│{C.E} {C.CN}Date    :{C.E} {info.get('upload_date', '?')}")
+    print(f"  {C.DG}│{C.E} {C.CN}Duration:{C.E} {info.get('duration_string', info.get('duration', '?'))}")
+    print(f"  {C.DG}│{C.E} {C.CN}Views   :{C.E} {C.G}{info.get('view_count', '?')}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.CN}Likes   :{C.E} {C.G}{info.get('like_count', '?')}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.CN}Comments:{C.E} {info.get('comment_count', '?')}")
+    print(f"  {C.DG}│{C.E} {C.CN}Res     :{C.E} {info.get('resolution', '?')}  FPS: {info.get('fps', '?')}")
     cats = ', '.join(info.get('categories', []))
     if cats:
-        print(f"  {C.CN}Category:{C.E} {cats}")
+        print(f"  {C.DG}│{C.E} {C.CN}Category:{C.E} {cats}")
     tags = info.get('tags', [])
     if tags:
-        print(f"  {C.CN}Tags    :{C.E} {', '.join(tags[:10])}{'...' if len(tags) > 10 else ''}")
+        print(f"  {C.DG}│{C.E} {C.CN}Tags    :{C.E} {', '.join(tags[:10])}{'...' if len(tags) > 10 else ''}")
+    _ui_separator()
     print()
 
 
@@ -1148,7 +1214,7 @@ def mode_download_single(km: KeyManager):
         print(f"{C.R}yt-dlp not installed. Run: pip install yt-dlp{C.E}")
         return
 
-    url = input(f"\n{C.BO}Paste video URL: {C.E}").strip()
+    url = input(f"\n  {C.BO}Paste video URL:{C.E} ").strip()
     if not url:
         return
 
@@ -1171,11 +1237,11 @@ def mode_download_single(km: KeyManager):
 
     # ── Sub-menu ────────────────────────────────────────────────────────
     while True:
-        print(f"{C.BO}─── What to do with this video? ───{C.E}")
-        print(f"  {C.CN}1.{C.E} Download video (MP4 / MP3 — quality selection, cookies, proxy)")
-        print(f"  {C.CN}2.{C.E} Download thumbnail (max resolution)")
-        print(f"  {C.CN}0.{C.E} Back to main menu")
-        ch = input(f"{C.CN}  > {C.E}").strip()
+        _ui_header('Actions', C.CN)
+        _ui_menu_item('1', 'Download video', C.G, 'MP4 / MP3 — quality + cookies')
+        _ui_menu_item('2', 'Download thumbnail', C.CN, 'max resolution')
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
 
         if ch == '1':
             _download_urls([url], DOWNLOADS_DIR)
@@ -1210,7 +1276,7 @@ def download_selected(results: list):
         return
 
     print(f"\n{C.CN}Enter numbers (e.g. 1,3,5) or 'all':{C.E}")
-    ch = input("  > ").strip().lower()
+    ch = _ui_prompt().lower()
     if ch == 'all':
         sel = items
     else:
@@ -1231,15 +1297,15 @@ def download_selected(results: list):
 def search_post_menu(results: list, query: str, km: KeyManager, page_size: int = 25) -> str:
     """After-search actions. Returns 'search' to loop, 'menu' to go back."""
     while True:
-        print(f"\n{C.BO}─── Actions ({len(results)} result(s) loaded) ───{C.E}")
-        print("  1. Save ALL results → find.txt")
-        print("  2. Show results again (paginated)")
-        print("  3. Download thumbnails (max resolution)")
-        print("  4. Download videos (yt-dlp → MP4)")
-        print("  5. Show channel analytics")
-        print("  6. New search")
-        print("  0. Back to main menu")
-        ch = input(f"{C.CN}  > {C.E}").strip()
+        _ui_header(f'Actions ({len(results)} result(s) loaded)', C.CN)
+        _ui_menu_item('1', 'Save ALL results → find.txt', C.G)
+        _ui_menu_item('2', 'Show results again', C.CN, 'paginated')
+        _ui_menu_item('3', 'Download thumbnails', C.CN, 'max resolution')
+        _ui_menu_item('4', 'Download videos', C.G, 'yt-dlp → MP4')
+        _ui_menu_item('5', 'Show channel analytics', C.B)
+        _ui_menu_item('6', 'New search', C.Y)
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
 
         if ch == '1':
             print(f"{C.CN}Saving all {len(results)} result(s) to find.txt...{C.E}")
@@ -1273,7 +1339,7 @@ def search_post_menu(results: list, query: str, km: KeyManager, page_size: int =
 def mode_search(km: KeyManager):
     """Search mode loop."""
     while True:
-        query = input(f"\n{C.BO}Search query (or 'back'): {C.E}").strip()
+        query = input(f"\n  {C.BO}Search query{C.E} {C.DM}(or 'back'){C.E}: ").strip()
         if query.lower() in ('back', 'exit', 'quit'):
             return
         if not query:
@@ -1544,11 +1610,11 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
     channel_subdir — subfolder name for thumbnails
     """
     while True:
-        print(f"\n{C.BO}─── Download: {C.CN}{label}{C.E}{C.BO} ({len(urls)} videos) ───{C.E}")
-        print(f"  {C.CN}1.{C.E} Download video")
-        print(f"  {C.CN}2.{C.E} Download video + thumbnails")
-        print(f"  {C.CN}0.{C.E} Back")
-        ch = input(f"{C.CN}  > {C.E}").strip()
+        _ui_header(f'Download: {label} ({len(urls)} videos)', C.G)
+        _ui_menu_item('1', 'Download video', C.G)
+        _ui_menu_item('2', 'Download video + thumbnails', C.CN)
+        _ui_menu_back('0', 'Back')
+        ch = _ui_prompt()
 
         if ch == '0':
             return
@@ -1575,9 +1641,9 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
 
 def mode_parse(km: KeyManager):
     """Channel parsing mode with post-parse download menu."""
-    print(f"\n{C.BO}─── Channel Parser ───{C.E}")
-    print("Paste a channel URL or @handle (e.g. @MrBeast)")
-    user_in = input(f"{C.CN}  Channel: {C.E}").strip()
+    _ui_header('Channel Parser', C.H)
+    print(f"  {C.DM}Paste a channel URL or @handle (e.g. @MrBeast){C.E}")
+    user_in = input(f"  {C.CN}›{C.E} ").strip()
     if not user_in:
         return
 
@@ -1627,12 +1693,12 @@ def mode_parse(km: KeyManager):
 
     # ── Post-parse download menu ─────────────────────────────────────────
     while True:
-        print(f"\n{C.BO}─── What to download? ───{C.E}")
-        print(f"  {C.CN}1.{C.E} Download long videos  ({C.G}{len(longs)}{C.E} videos)")
-        print(f"  {C.CN}2.{C.E} Download shorts        ({C.Y}{len(shorts)}{C.E} videos)")
-        print(f"  {C.CN}3.{C.E} Download long + shorts ({C.G}{len(longs) + len(shorts)}{C.E} videos)")
-        print(f"  {C.CN}0.{C.E} Back to main menu")
-        ch = input(f"{C.CN}  > {C.E}").strip()
+        _ui_header('Download Options', C.G)
+        _ui_menu_item('1', f'Download long videos', C.G, f'{len(longs)} videos')
+        _ui_menu_item('2', f'Download shorts', C.Y, f'{len(shorts)} videos')
+        _ui_menu_item('3', f'Download long + shorts', C.CN, f'{len(longs) + len(shorts)} videos')
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
 
         if ch == '0':
             return
@@ -1708,7 +1774,7 @@ def _download_single_thumbnail(video_id: str, title: str):
 
 def thumb_single(km: KeyManager):
     """Download thumbnail from a single video URL."""
-    url = input(f"\n{C.BO}Paste video URL: {C.E}").strip()
+    url = input(f"\n  {C.BO}Paste video URL:{C.E} ").strip()
     if not url:
         return
 
@@ -1733,7 +1799,7 @@ def thumb_single(km: KeyManager):
 
 def thumb_channel(km: KeyManager):
     """Download all thumbnails from a channel."""
-    user_in = input(f"\n{C.BO}Paste channel URL or @handle: {C.E}").strip()
+    user_in = input(f"\n  {C.BO}Paste channel URL or @handle:{C.E} ").strip()
     if not user_in:
         return
 
@@ -1775,11 +1841,11 @@ def thumb_channel(km: KeyManager):
 
 def mode_thumbnails(km: KeyManager):
     """Thumbnail download menu."""
-    print(f"\n{C.BO}─── Thumbnails ───{C.E}")
-    print(f"  {C.CN}1.{C.E} Download from single video URL")
-    print(f"  {C.CN}2.{C.E} Download all from a channel")
-    print(f"  {C.CN}0.{C.E} Back")
-    ch = input(f"{C.CN}  > {C.E}").strip()
+    _ui_header('Thumbnails', C.CN)
+    _ui_menu_item('1', 'Download from single video URL', C.CN)
+    _ui_menu_item('2', 'Download all from a channel', C.G)
+    _ui_menu_back('0', 'Back')
+    ch = _ui_prompt()
 
     if ch == '1':
         thumb_single(km)
@@ -1794,27 +1860,25 @@ def mode_thumbnails(km: KeyManager):
 def main():
     os.system('')  # enable ANSI colours on Windows
 
-    print(f"{C.BO}{C.H}")
-    print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v4.2.0         ║")
-    print("╚══════════════════════════════════════════════╝")
-    print(f"{C.E}")
+    _ui_banner('YouTube Channel Finder  v4.3.0', 52, C.H)
 
+    _ui_header('Startup', C.CN)
     check_updates()
     ensure_environment()
     km = KeyManager(API_KEYS_FILE)
     check_key_quotas(km)
 
     while True:
-        print(f"\n{C.BO}═══ Main Menu ═══{C.E}")
-        print(f"  {C.CN}1.{C.E} Search videos")
-        print(f"  {C.CN}2.{C.E} Download single video by URL")
-        print(f"  {C.CN}3.{C.E} Parse channel (long / shorts)")
-        print(f"  {C.CN}4.{C.E} Download from videolinks.txt")
-        print(f"  {C.CN}5.{C.E} Download thumbnails")
-        print(f"  {C.CN}0.{C.E} Exit")
+        _ui_banner('Main Menu', 52, C.CN)
+        _ui_menu_item('1', 'Search videos', C.G, '🔍')
+        _ui_menu_item('2', 'Download single video by URL', C.CN, '⬇️')
+        _ui_menu_item('3', 'Parse channel (long / shorts)', C.H, '📊')
+        _ui_menu_item('4', 'Download from videolinks.txt', C.Y, '📥')
+        _ui_menu_item('5', 'Download thumbnails', C.B, '🖼️')
+        _ui_separator()
+        _ui_menu_back('0', 'Exit')
 
-        choice = input(f"{C.CN}  > {C.E}").strip()
+        choice = _ui_prompt()
 
         if choice == '1':
             mode_search(km)
@@ -1829,10 +1893,10 @@ def main():
         elif choice == '0':
             break
         else:
-            print(f"{C.Y}Invalid choice, try again.{C.E}")
+            print(f"  {C.Y}Invalid choice, try again.{C.E}")
 
-    print(f"\n{C.G}Goodbye!{C.E}")
-    input("Press Enter to close...")
+    print(f"\n  {C.G}{C.BO}Goodbye! 👋{C.E}")
+    input("  Press Enter to close...")
 
 
 if __name__ == "__main__":
