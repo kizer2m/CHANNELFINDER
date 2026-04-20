@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.1.0
+# YouTube Channel Finder v4.2.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -36,7 +36,8 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
 - Fetches stats via yt-dlp (no API quota used)
 
 ### 📋 Mode 3 — Parse Channel
-- Accepts channel URL, `@handle`, or free-text search
+- Accepts channel URL, `@handle` (including non-Latin handles like `@ОльгаКиселёва`), or free-text search
+- **Handles percent-encoded URLs**: `@%D0%9E%D0%BB%D1%8C%D0%B3%D0%B0...` is decoded automatically
 - Fetches **all** videos from a channel using the **uploads playlist** (`playlistItems` API)
   - No result cap — works correctly even for channels with **thousands** of videos
   - Uses only **1 quota unit** per API call (100× cheaper than search)
@@ -221,6 +222,12 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.2.0 (2026-04-20)
+- **Non-ASCII channel handle support** — `resolve_channel_id()` now URL-decodes percent-encoded input (e.g. `@%D0%9E%D0%BB%D1%8C%D0%B3%D0%B0` → `@ОльгаКиселёва`) before regex matching; uses `re.UNICODE` flag so Cyrillic, CJK, Arabic, and other non-Latin handles are correctly recognized
+- **Thumbnail naming from parse download menu** — `_download_thumbnails_for_urls()` now fetches video titles via yt-dlp (no API quota, no download) and names files `{title} [{vid}].jpg` — consistent with all other thumbnail functions. Falls back to `{vid}.jpg` if title fetch fails
+- Added `import urllib.parse` for URL decoding
+- Version bump: `4.1.0` → `4.2.0`
 
 ### v4.1.0 (2026-04-14)
 - **Startup environment check** — new `ensure_environment()` function runs after `check_updates()` on every launch:

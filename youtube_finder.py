@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.1.0
+YouTube Channel Finder v4.2.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -12,6 +12,7 @@ YouTube Channel Finder v4.1.0
 import os
 import sys
 import re
+import urllib.parse
 import json
 import subprocess
 import urllib.request
@@ -1310,10 +1311,14 @@ def resolve_channel_id(km: KeyManager, user_input: str):
     Accept:
       https://www.youtube.com/channel/UC...
       https://www.youtube.com/@handle
-      @handle
+      @handle  (ASCII or Unicode, e.g. @ОльгаКиселёва)
+      URL-encoded handles (e.g. @%D0%9E%D0%BB%D1%8C%D0%B3%D0%B0)
     Returns (channel_id, channel_title) or (None, None).
     """
     user_input = user_input.strip()
+
+    # URL-decode so percent-encoded Unicode handles become readable
+    user_input = urllib.parse.unquote(user_input)
 
     # Direct channel URL
     m = re.search(r'youtube\.com/channel/(UC[\w-]+)', user_input)
@@ -1324,19 +1329,19 @@ def resolve_channel_id(km: KeyManager, user_input: str):
             return cid, resp['items'][0]['snippet']['title']
         return cid, cid
 
-    # @handle (in URL or standalone)
-    m = re.search(r'@([\w.\-]+)', user_input)
+    # @handle (in URL or standalone) — Unicode-aware regex
+    m = re.search(r'@([\w.\-]+)', user_input, re.UNICODE)
     if m:
-        handle = m.group(0)  # includes @
+        handle = m.group(1)  # without @
         # Try forHandle first (YouTube API v3 supports it on channels().list)
         resp = api_call(km, lambda yt: yt.channels().list(
-            part="snippet", forHandle=handle.lstrip('@')))
+            part="snippet", forHandle=handle))
         if resp and resp.get('items'):
             it = resp['items'][0]
             return it['id'], it['snippet']['title']
-        # Fallback: search
+        # Fallback: search with @handle
         resp = api_call(km, lambda yt: yt.search().list(
-            part="snippet", q=handle, type="channel", maxResults=1))
+            part="snippet", q='@' + handle, type="channel", maxResults=1))
         if resp and resp.get('items'):
             it = resp['items'][0]
             return it['snippet']['channelId'], it['snippet']['title']
@@ -1470,18 +1475,53 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
     """
     Download max-res thumbnails for a list of YouTube video URLs.
     Saves to thumbnails/<channel_subdir>/ folder.
+    Names each thumbnail after the video title: "{title} [{vid}].jpg"
+    (consistent with _download_single_thumbnail / thumb_channel naming).
     """
     thumb_dir = os.path.join(THUMBS_DIR, channel_subdir)
     os.makedirs(thumb_dir, exist_ok=True)
     total = len(urls)
     ok = 0
+
+    # ── Resolve video titles via yt-dlp (no download, no API quota) ─────
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        YoutubeDL = None
+
+    title_cache = {}  # vid → title
+    if YoutubeDL is not None:
+        print(f"  {C.CN}Fetching video titles for thumbnails...{C.E}")
+        probe_opts = {
+            'quiet': True, 'no_warnings': True,
+            'logger': _YtLogger(), 'skip_download': True,
+        }
+        try:
+            with YoutubeDL(probe_opts) as ydl:
+                for url in urls:
+                    try:
+                        info = ydl.extract_info(url, download=False, process=False)
+                        if info:
+                            title_cache[info.get('id', '')] = info.get('title', '')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     for i, url in enumerate(urls, 1):
         m = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
         if not m:
             print(f"  {C.Y}⚠  Cannot extract video ID from: {url}{C.E}")
             continue
         vid = m.group(1)
-        fname = os.path.join(thumb_dir, f"{vid}.jpg")
+        title = title_cache.get(vid, '')
+        if title:
+            safe_title = safe_filename(title)
+            fname = os.path.join(thumb_dir, f"{safe_title} [{vid}].jpg")
+            display = safe_title
+        else:
+            fname = os.path.join(thumb_dir, f"{vid}.jpg")
+            display = vid
         img_url = f"https://img.youtube.com/vi/{vid}/maxresdefault.jpg"
         try:
             urllib.request.urlretrieve(img_url, fname)
@@ -1489,9 +1529,9 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
                 img_url = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                 urllib.request.urlretrieve(img_url, fname)
             ok += 1
-            print(f"  {C.G}[{i}/{total}] ✓{C.E} {vid}")
+            print(f"  {C.G}[{i}/{total}] ✓{C.E} {display}")
         except Exception as e:
-            print(f"  {C.R}[{i}/{total}] ✗ {vid}: {e}{C.E}")
+            print(f"  {C.R}[{i}/{total}] ✗ {display}: {e}{C.E}")
     print(f"  {C.G}Thumbnails done: {ok}/{total} → {thumb_dir}{C.E}")
 
 
@@ -1754,7 +1794,7 @@ def main():
 
     print(f"{C.BO}{C.H}")
     print("╔══════════════════════════════════════════════╗")
-    print("║       YouTube Channel Finder  v4.1.0         ║")
+    print("║       YouTube Channel Finder  v4.2.0         ║")
     print("╚══════════════════════════════════════════════╝")
     print(f"{C.E}")
 
