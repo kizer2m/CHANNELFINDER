@@ -294,6 +294,26 @@ CHANNELFINDER/
 - **Startup sequence** — update check now shows a single-line spinner-style status (`⟳ Checking...` → `✓ up to date`); environment check and key status use styled headers and icons
 - **Main menu** — displayed as a boxed banner with emoji indicators per mode
 - **All sub-menus** styled consistently: filters, quality picker, cookie selector, video stats, search actions, parse download menu, thumbnails menu
+- **Download progress bar** — redesigned to match startup animation style: `━─` characters, cyan-teal gradient, spinner icon `⠋⠙⠹...`, consistent 2-space indent; completion line shows `✓` with green gradient bar
+- **Postprocessor messages** — merging/converting/extracting steps now show `⟳` spinner icon while in progress and `✓` on completion; MP3 audio extraction and Merger also confirmed with `✓`
+- **Per-video download header** — title and output path shown inside `│` bordered block between `─── separator ───` lines for clear visual grouping
+- **Global indent pass** — every `print()` across the entire codebase now uses the standard 2-space indent with icon prefix (`✓` / `✗` / `⟳` / `⚠` / `✦`); previously unindented messages fixed in:
+  - `KeyManager._load` — error and not-found messages
+  - `KeyManager.rotate` — key rotation notice
+  - `api_call` — HTTP errors, key rotation, exhausted keys
+  - `search_youtube_all` — pagination progress
+  - `download_thumbnails_search` — per-thumbnail status and final count
+  - `save_results` — saved count and save error
+  - `mode_parse` — channel info, fetch/classify status, file saved messages, error notices
+  - `mode_download` — URL list, file-not-found, no-URLs messages
+  - `thumb_single` / `thumb_channel` — thumbnail download status and final count
+  - `mode_download_single` — fetch error, could-not-load warning, thumbnail download line
+  - `download_selected` — no-videos and nothing-selected notices
+  - `search_post_menu` — saving notice, channel analytics block
+- **Metadata saved line** — now shows only the filename (not the full path) to prevent long-path line wrapping outside the indent column; format: `  ✓  Meta  Filename [id].txt`
+- **`mode_parse` info blocks** — channel name and video counts displayed inside `│` bordered blocks with `─── separator ───` framing, matching the download header style
+- **`mode_download`** — URL list now uses `│` prefix per entry with dim formatting; final done line uses `✦` icon with separator
+- **`thumb_channel`** — final downloaded count now shows `✦` icon with `─── separator ───` framing
 - Version bump: `4.2.0` → `4.3.0`
 
 ### v4.2.0 (2026-04-20)
