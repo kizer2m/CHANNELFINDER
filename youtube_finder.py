@@ -402,11 +402,11 @@ class KeyManager:
             with open(path, 'r', encoding='utf-8') as f:
                 keys = [line.strip() for line in f if line.strip()]
             if not keys:
-                print(f"{C.R}No keys in {path}{C.E}")
+                print(f"  {C.R}✗  No API keys found in {path}{C.E}")
                 sys.exit(1)
             return keys
         except FileNotFoundError:
-            print(f"{C.R}{path} not found{C.E}")
+            print(f"  {C.R}✗  {path} not found{C.E}")
             sys.exit(1)
 
     def key(self) -> str:
@@ -414,7 +414,7 @@ class KeyManager:
 
     def rotate(self):
         self.idx = (self.idx + 1) % len(self.keys)
-        print(f"{C.Y}  → Switched to key #{self.idx + 1}{C.E}")
+        print(f"  {C.Y}⟳  Switched to key #{self.idx + 1}{C.E}")
 
 
 def check_key_quotas(km: KeyManager):
@@ -465,16 +465,16 @@ def api_call(km: KeyManager, build_fn):
         except HttpError as e:
             code = e.resp.status
             if code in (403, 429, 400):
-                print(f"{C.R}  Key ...{km.key()[-6:]} error {code}. Rotating...{C.E}")
+                print(f"  {C.R}✗  Key ...{km.key()[-6:]} error {code}. Rotating...{C.E}")
                 km.rotate()
                 attempts += 1
             else:
-                print(f"{C.R}  HTTP {code}: {e}{C.E}")
+                print(f"  {C.R}✗  HTTP {code}: {e}{C.E}")
                 return None
         except Exception as e:
-            print(f"{C.R}  Error: {e}{C.E}")
+            print(f"  {C.R}✗  Error: {e}{C.E}")
             return None
-    print(f"{C.R}All API keys exhausted.{C.E}")
+    print(f"  {C.R}✗  All API keys exhausted.{C.E}")
     return None
 
 
@@ -561,7 +561,7 @@ def search_youtube_all(km: KeyManager, query: str, filters: dict) -> list:
         if not page_token:
             break
 
-        print(f"  ... fetched {len(all_items)} so far")
+        print(f"  {C.DM}⟳  Fetched {len(all_items)} so far...{C.E}")
 
     return all_items
 
@@ -671,10 +671,12 @@ def download_thumbnails_search(results: list):
                 url = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                 urllib.request.urlretrieve(url, fname)
             count += 1
-            print(f"  {C.G}✓{C.E} {title}")
+            print(f"  {C.G}✓{C.E}  {title}")
         except Exception as e:
-            print(f"  {C.R}✗ {vid}: {e}{C.E}")
-    print(f"{C.G}Downloaded {count} thumbnail(s) → {THUMBS_DIR}{C.E}")
+            print(f"  {C.R}✗  {vid}: {e}{C.E}")
+    _ui_separator()
+    print(f"  {C.G}{C.BO}✦{C.E}  {C.G}Downloaded {count} thumbnail(s) → {THUMBS_DIR}{C.E}")
+    _ui_separator()
 
 
 def save_results(results: list, query: str):
@@ -688,9 +690,9 @@ def save_results(results: list, query: str):
                 if vid:
                     f.write(f"https://www.youtube.com/watch?v={vid}\n")
                     count += 1
-        print(f"{C.G}Saved {count} link(s) → {OUTPUT_FILE}{C.E}")
+        print(f"  {C.G}✓{C.E}  {C.G}Saved {count} link(s) → {OUTPUT_FILE}{C.E}")
     except Exception as e:
-        print(f"{C.R}Save error: {e}{C.E}")
+        print(f"  {C.R}✗  Save error: {e}{C.E}")
 
 
 def _pick_quality() -> dict:
