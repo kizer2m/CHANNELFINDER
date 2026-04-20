@@ -1495,6 +1495,8 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
         probe_opts = {
             'quiet': True, 'no_warnings': True,
             'logger': _YtLogger(), 'skip_download': True,
+            'js_runtimes': {'node': {}},
+            'remote_components': ['ejs:github'],
         }
         try:
             with YoutubeDL(probe_opts) as ydl:
