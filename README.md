@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.2.0
+# YouTube Channel Finder v4.3.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -276,6 +276,21 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.3.0 (2026-04-20)
+- **Beautiful UI overhaul** — every menu, header, and prompt across the entire CLI has been redesigned with a consistent, visually polished style:
+  - New `_ui_banner()` draws double-line boxed headers for the app title and main menu
+  - New `_ui_header()` draws section headers with decorative lines
+  - New `_ui_menu_item()` renders menu options with colored accents, vertical bar guides, and dim descriptions
+  - New `_ui_menu_back()` renders back/exit options in dimmed style
+  - New `_ui_prompt()` provides a consistent cyan `›` input prompt
+  - New `_ui_separator()` draws thin separator lines
+  - New `_ui_status()` renders status lines with icons
+- **Expanded ANSI palette** — `C` class now includes: `DM` (dim), `IT` (italic), `UL` (underline), `W` (bright white), `DG` (dark gray)
+- **Startup sequence** — update check now shows a single-line spinner-style status (`⟳ Checking...` → `✓ up to date`); environment check and key status use styled headers and icons
+- **Main menu** — displayed as a boxed banner with emoji indicators per mode
+- **All sub-menus** styled consistently: filters, quality picker, cookie selector, video stats, search actions, parse download menu, thumbnails menu
+- Version bump: `4.2.0` → `4.3.0`
 
 ### v4.2.0 (2026-04-20)
 - **Non-ASCII channel handle support** — `resolve_channel_id()` now URL-decodes percent-encoded input (e.g. `@%D0%9E%D0%BB%D1%8C%D0%B3%D0%B0` → `@ОльгаКиселёва`) before regex matching; uses `re.UNICODE` flag so Cyrillic, CJK, Arabic, and other non-Latin handles are correctly recognized
