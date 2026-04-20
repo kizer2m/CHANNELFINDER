@@ -286,7 +286,11 @@ CHANNELFINDER/
   - New `_ui_prompt()` provides a consistent cyan `›` input prompt
   - New `_ui_separator()` draws thin separator lines
   - New `_ui_status()` renders status lines with icons
+- **CFINDER ASCII art banner** — large gradient block-letter logo displayed on startup (Gemini CLI style) with version tagline
+- **Animated startup sequence** — dependency check and environment scan now show real-time progress bars with spinners, percentage indicators, and color-coded status results
 - **Expanded ANSI palette** — `C` class now includes: `DM` (dim), `IT` (italic), `UL` (underline), `W` (bright white), `DG` (dark gray)
+- **UI separator consistency** — all `/` separators in menus replaced with `|` for cleaner visual style (e.g. `long | shorts`, `4K | 8K`, `Cookies | Authentication`)
+- **Silent launcher** — `run_search.cmd` no longer shows "Installing / updating dependencies..." message; pip runs fully silent before the script
 - **Startup sequence** — update check now shows a single-line spinner-style status (`⟳ Checking...` → `✓ up to date`); environment check and key status use styled headers and icons
 - **Main menu** — displayed as a boxed banner with emoji indicators per mode
 - **All sub-menus** styled consistently: filters, quality picker, cookie selector, video stats, search actions, parse download menu, thumbnails menu

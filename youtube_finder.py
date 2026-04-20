@@ -1414,7 +1414,7 @@ def mode_download_single(km: KeyManager):
     # ── Sub-menu ────────────────────────────────────────────────────────
     while True:
         _ui_header('Actions', C.CN)
-        _ui_menu_item('1', 'Download video', C.G, 'MP4 / MP3 — quality + cookies')
+        _ui_menu_item('1', 'Download video', C.G, 'MP4 | MP3 — quality + cookies')
         _ui_menu_item('2', 'Download thumbnail', C.CN, 'max resolution')
         _ui_menu_back('0', 'Back to main menu')
         ch = _ui_prompt()
@@ -2050,7 +2050,7 @@ def main():
         _ui_banner('Main Menu', 52, C.CN)
         _ui_menu_item('1', 'Search videos', C.G, '🔍')
         _ui_menu_item('2', 'Download single video by URL', C.CN, '⬇️')
-        _ui_menu_item('3', 'Parse channel (long / shorts)', C.H, '📊')
+        _ui_menu_item('3', 'Parse channel (long | shorts)', C.H, '📊')
         _ui_menu_item('4', 'Download from videolinks.txt', C.Y, '📥')
         _ui_menu_item('5', 'Download thumbnails', C.B, '🖼️')
         _ui_separator()
