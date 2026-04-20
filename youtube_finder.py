@@ -1030,7 +1030,8 @@ def _save_video_metadata(info_dict: dict, out_dir: str):
             f.write(f"Tags: {', '.join(info_dict.get('tags', []))}\n")
             desc = info_dict.get('description', '')
             f.write(f"\n─── Description ───\n{desc}\n")
-        print(f"  {C.G}Metadata saved → {meta_path}{C.E}")
+        meta_fname = os.path.basename(meta_path)
+        print(f"  {C.G}✓{C.E}  {C.DM}Meta  {C.E}{C.DG}{meta_fname}{C.E}")
     except Exception as e:
         print(f"  {C.R}Failed to save metadata: {e}{C.E}")
 
