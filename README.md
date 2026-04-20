@@ -378,4 +378,6 @@ CHANNELFINDER/
 
 ## License
 
-This project is for personal use. Respect YouTube's Terms of Service when using this tool.
+This project is licensed under the [MIT License](LICENSE).
+
+> ⚠️ This tool interacts with YouTube. Please respect [YouTube's Terms of Service](https://www.youtube.com/t/terms) when using it.
