@@ -606,16 +606,18 @@ def display_results_paginated(results: list, ch_stats: dict, page_size: int = 25
     """Display search results with paginated output.
     Space = next page, Escape = stop and return to actions menu."""
     if not results:
-        print(f"{C.Y}No results found.{C.E}")
+        print(f"  {C.Y}No results found.{C.E}")
         return
 
     total = len(results)
     total_pages = (total + page_size - 1) // page_size
     current_page = 0
 
-    print(f"\n{C.G}{C.BO}Found {total} video(s).{C.E}")
-    print(f"{C.CN}Showing {page_size} per page ({total_pages} page(s) total).{C.E}")
-    print(f"{C.Y}[Space]{C.E} = next page  |  {C.Y}[Escape]{C.E} = stop and go to actions menu\n")
+    _ui_separator()
+    print(f"  {C.G}{C.BO}Found {total} video(s).{C.E}  {C.DM}{total_pages} page(s) · {page_size}/page{C.E}")
+    print(f"  {C.DM}[Space] = next page  │  [Escape] = actions menu{C.E}")
+    _ui_separator()
+    print()
 
     while current_page < total_pages:
         start = current_page * page_size
@@ -629,10 +631,12 @@ def display_results_paginated(results: list, ch_stats: dict, page_size: int = 25
         if current_page < total_pages:
             shown = end
             remaining = total - shown
-            print(f"{C.BO}── Shown {shown}/{total}  │  Remaining: {remaining}  │  "
-                  f"Page {current_page}/{total_pages} ──{C.E}")
-            print(f"{C.Y}[Space]{C.E} = show next {min(page_size, remaining)}  |  "
-                  f"{C.Y}[Escape]{C.E} = stop\n")
+            _ui_separator()
+            print(f"  {C.DM}Shown {shown}/{total}  │  Remaining: {remaining}  │  "
+                  f"Page {current_page}/{total_pages}{C.E}")
+            print(f"  {C.DM}[Space] next {min(page_size, remaining)}  │  [Escape] stop{C.E}")
+            _ui_separator()
+            print()
 
             # Wait for keypress
             while True:
@@ -640,11 +644,13 @@ def display_results_paginated(results: list, ch_stats: dict, page_size: int = 25
                 if key == b' ':     # Space
                     break
                 elif key == b'\x1b':  # Escape
-                    print(f"\n{C.CN}Stopped. Shown {shown} of {total} results.{C.E}")
+                    print(f"\n  {C.CN}Stopped. Shown {shown} of {total} results.{C.E}")
                     return
                 # ignore other keys
         else:
-            print(f"{C.G}{C.BO}── All {total} result(s) displayed ──{C.E}")
+            _ui_separator()
+            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}All {total} result(s) displayed{C.E}")
+            _ui_separator()
 
 
 def download_thumbnails_search(results: list):
@@ -1055,7 +1061,10 @@ class _YtLogger:
 
 
 def _progress_hook(d):
-    """Green progress bar for yt-dlp downloads."""
+    """Styled progress bar for yt-dlp downloads — matches startup bar style."""
+    g_dl = '\033[38;5;44m'   # cyan-teal (same as startup)
+    g_ok = '\033[38;5;49m'   # green-cyan (done state)
+
     if d['status'] == 'downloading':
         total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
         downloaded = d.get('downloaded_bytes', 0)
@@ -1064,40 +1073,45 @@ def _progress_hook(d):
 
         if total > 0:
             pct = downloaded / total
-            bar_len = 40
-            filled = int(bar_len * pct)
-            bar = '█' * filled + '░' * (bar_len - filled)
-            pct_str = f"{pct * 100:5.1f}%"
         else:
-            bar = '░' * 40
-            pct_str = '  ?%'
+            pct = 0.0
 
-        speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else '? MB/s'
-        eta_str = f"{eta}s" if eta else '?'
+        bar = _progress_bar_str(pct, 36, g_dl, C.DG)
+        pct_str = f"{pct * 100:5.1f}%"
+        speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else '?'
+        eta_str   = f"{eta}s" if eta else '?'
 
-        print(f"\r  {C.G}{bar}{C.E} {pct_str}  {speed_str}  ETA {eta_str}   ", end='', flush=True)
+        spinner = next(_spinner_gen)
+        print(f"\r  {g_dl}{spinner}{C.E}  {bar}  {C.DM}{pct_str}{C.E}  {C.DG}{speed_str}  ETA {eta_str}{C.E}   ",
+              end='', flush=True)
 
     elif d['status'] == 'finished':
-        filename = d.get('filename', '')
         total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
         size_str = f"{total / 1024 / 1024:.1f} MB" if total else '? MB'
-        print(f"\r  {C.G}{'█' * 40}{C.E} 100.0%  {size_str}  Done!")
+        bar_done = _progress_bar_str(1.0, 36, g_ok)
+        print(f"\r  {C.G}{C.BO}✓{C.E}  {bar_done}  {C.DM}100.0%{C.E}  {C.G}{size_str}  Done!{C.E}          ")
 
 
 def _postprocessor_hook(d):
     """Show clean messages for post-processing steps."""
+    g_dl = '\033[38;5;44m'
+    g_ok = '\033[38;5;49m'
     if d['status'] == 'started':
         pp = d.get('postprocessor', '')
         if 'Merger' in pp:
-            print(f"  {C.CN}Merging audio + video...{C.E}")
+            print(f"  {g_dl}⟳{C.E}  {C.W}Merging audio + video...{C.E}")
         elif 'VideoConvertor' in pp or 'VideoRemuxer' in pp:
-            print(f"  {C.CN}Converting to MP4...{C.E}")
+            print(f"  {g_dl}⟳{C.E}  {C.W}Converting to MP4...{C.E}")
         elif 'ExtractAudio' in pp:
-            print(f"  {C.CN}Extracting audio (MP3)...{C.E}")
+            print(f"  {g_dl}⟳{C.E}  {C.W}Extracting audio (MP3)...{C.E}")
     elif d['status'] == 'finished':
         pp = d.get('postprocessor', '')
         if 'VideoConvertor' in pp or 'VideoRemuxer' in pp:
-            print(f"  {C.G}✓ Converted to MP4{C.E}")
+            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Converted to MP4{C.E}")
+        elif 'FFmpegExtractAudio' in pp:
+            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Audio extracted (MP3){C.E}")
+        elif 'Merger' in pp:
+            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Merged successfully{C.E}")
 
 
 def _is_bot_error(msg: str) -> bool:
@@ -1163,11 +1177,13 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     # This avoids format-not-available errors during the info step.
     raw = ydl.extract_info(url, download=False, process=False)
     if not raw:
-        print(f"{C.R}  Could not fetch info for {url}{C.E}")
+        print(f"  {C.R}✗  Could not fetch info for {url}{C.E}")
         return False
     title = raw.get('title') or raw.get('id') or url
-    print(f"{C.BO}[{i}/{total}]{C.E} {C.CN}{title}{C.E}")
-    print(f"  → {out_dir}")
+    _ui_separator()
+    print(f"  {C.DG}│{C.E} {C.DM}[{i}/{total}]{C.E}  {C.W}{C.BO}{title}{C.E}")
+    print(f"  {C.DG}│{C.E}  {C.DM}→ {out_dir}{C.E}")
+    _ui_separator()
     # download() runs the full pipeline: format selection + download + post-process
     ydl.download([url])
     # For metadata, re-fetch with full processing (no download) to get resolved fields
@@ -1179,7 +1195,7 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     # Remove from videolinks.txt if this batch came from there
     if from_videolinks:
         _remove_url_from_videolinks(url)
-        print(f"  {C.G}✓ Removed from videolinks.txt{C.E}")
+        print(f"  {C.G}✓{C.E}  {C.DM}Removed from videolinks.txt{C.E}")
     print()
     return True
 
@@ -1285,12 +1301,13 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                     break  # move to next URL
         finally:
             _cleanup_tmp_cookie_db(cookie_opts)
-        print(f"{C.G}All done → {out_dir}{C.E}")
+        print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
         return
 
     base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
 
-    print(f"\n{C.G}Starting download of {len(urls)} video(s)...{C.E}\n")
+    print(f"\n  {C.G}{C.BO}⬢{C.E}  {C.W}{C.BO}Starting download of {len(urls)} video(s)...{C.E}")
+    print(f"  {C.DM}{'─' * 46}{C.E}\n")
 
     failed_urls = []
 
@@ -1308,11 +1325,11 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                         _print_cookie_db_help(browser_name)
                         break  # no point continuing, all URLs will hit the same error
 
-                    print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+                    print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
 
                     # If it looks like a bot block and we're not already using cookies
                     if _is_bot_error(err_msg) and cookie_mode == 'none':
-                        print(f"{C.Y}  ↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
+                        print(f"  {C.Y}↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
                         failed_urls.append(url)
                     else:
                         print()
@@ -1350,11 +1367,12 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                         if _is_cookie_db_error(err_msg):
                             _print_cookie_db_help(browser)
                             break
-                        print(f"\n{C.R}  Retry failed: {err_msg[:200]}{C.E}\n")
+                        print(f"\n  {C.R}✗  Retry failed: {err_msg[:200]}{C.E}\n")
         finally:
             _cleanup_tmp_cookie_db(retry_cookie_opts)
 
-    print(f"{C.G}All done → {out_dir}{C.E}")
+    print(f"\n  {C.DM}{'─' * 46}{C.E}")
+    print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1403,13 +1421,13 @@ def mode_download_single(km: KeyManager):
                         'remote_components': ['ejs:github']}) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        print(f"{C.R}  Could not fetch info: {e}{C.E}")
+        print(f"  {C.R}✗  Could not fetch info: {e}{C.E}")
         info = None
 
     if info:
         _print_video_stats(info)
     else:
-        print(f"{C.Y}  Could not load video stats (URL may be private/geo-blocked).{C.E}\n")
+        print(f"  {C.Y}⚠  Could not load video stats (URL may be private/geo-blocked).{C.E}\n")
 
     # ── Sub-menu ────────────────────────────────────────────────────────
     while True:
@@ -1430,9 +1448,9 @@ def mode_download_single(km: KeyManager):
                 break
             vid = m.group(1)
             title = info.get('title', vid) if info else vid
-            print(f"{C.CN}Downloading thumbnail for: {title}{C.E}")
+            print(f"  {C.CN}⟳  Downloading thumbnail for: {C.W}{title}{C.E}")
             _download_single_thumbnail(vid, title)
-            print(f"{C.G}Done → {THUMBS_DIR}{C.E}")
+            print(f"  {C.G}✦  Done → {THUMBS_DIR}{C.E}")
             break
         elif ch == '0':
             break
@@ -1448,10 +1466,10 @@ def download_selected(results: list):
 
     items = [r for r in results if r['id'].get('videoId')]
     if not items:
-        print("No downloadable videos.")
+        print(f"  {C.Y}No downloadable videos.{C.E}")
         return
 
-    print(f"\n{C.CN}Enter numbers (e.g. 1,3,5) or 'all':{C.E}")
+    print(f"\n  {C.CN}Enter numbers (e.g. 1,3,5) or{C.E} {C.W}all{C.E}{C.CN}:{C.E}")
     ch = _ui_prompt().lower()
     if ch == 'all':
         sel = items
@@ -1460,10 +1478,10 @@ def download_selected(results: list):
             idxs = [int(x.strip()) - 1 for x in ch.split(',')]
             sel = [items[i] for i in idxs if 0 <= i < len(items)]
         except (ValueError, IndexError):
-            print(f"{C.R}Invalid input.{C.E}")
+            print(f"  {C.R}Invalid input.{C.E}")
             return
     if not sel:
-        print("Nothing selected.")
+        print(f"  {C.Y}Nothing selected.{C.E}")
         return
 
     urls = [f"https://www.youtube.com/watch?v={it['id']['videoId']}" for it in sel]
@@ -1484,7 +1502,7 @@ def search_post_menu(results: list, query: str, km: KeyManager, page_size: int =
         ch = _ui_prompt()
 
         if ch == '1':
-            print(f"{C.CN}Saving all {len(results)} result(s) to find.txt...{C.E}")
+            print(f"  {C.CN}⟳  Saving all {len(results)} result(s) to find.txt...{C.E}")
             save_results(results, query)
         elif ch == '2':
             cids = list({it['snippet'].get('channelId', '')
@@ -1500,12 +1518,14 @@ def search_post_menu(results: list, query: str, km: KeyManager, page_size: int =
                          for it in results if it['snippet'].get('channelId')})
             stats = get_channel_stats(km, cids)
             if stats:
-                print(f"\n{C.BO}Channel Analytics:{C.E}")
+                _ui_header('Channel Analytics', C.B)
                 for cid, s in stats.items():
-                    print(f"  {C.CN}{s['title']}{C.E}  "
-                          f"Subs: {s['subs']}  Videos: {s['vids']}  Views: {s['views']}")
+                    print(f"  {C.DG}│{C.E} {C.CN}{s['title']}{C.E}")
+                    print(f"  {C.DG}│{C.E}  {C.DM}Subs: {C.E}{C.W}{s['subs']}{C.E}  "
+                          f"{C.DM}Videos: {C.E}{C.W}{s['vids']}{C.E}  "
+                          f"{C.DM}Views: {C.E}{C.W}{s['views']}{C.E}")
             else:
-                print(f"{C.Y}Could not load channel stats.{C.E}")
+                print(f"  {C.Y}⚠  Could not load channel stats.{C.E}")
         elif ch == '6':
             return 'search'
         elif ch == '0':
@@ -1524,11 +1544,11 @@ def mode_search(km: KeyManager):
         filters = ask_filters()
         page_size = filters.get('page_size', 25)
 
-        print(f"\n{C.G}Searching for '{query}'...{C.E}")
+        print(f"\n  {C.CN}⟳  Searching for {C.W}'{query}'{C.E}{C.CN}...{C.E}")
         results = search_youtube_all(km, query, filters)
 
         if not results:
-            print(f"{C.Y}No results found.{C.E}")
+            print(f"  {C.Y}No results found.{C.E}")
             continue
 
         # Fetch channel stats for the first batch to display alongside results
@@ -1796,11 +1816,11 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
             return
 
         if ch not in ('1', '2'):
-            print(f"{C.Y}Invalid choice.{C.E}")
+            print(f"  {C.Y}Invalid choice.{C.E}")
             continue
 
         # Copy URLs into videolinks.txt (without removing them from parsed files)
-        print(f"\n{C.CN}Copying {len(urls)} URL(s) to videolinks.txt...{C.E}")
+        print(f"\n  {C.CN}⟳  Copying {len(urls)} URL(s) to videolinks.txt...{C.E}")
         _copy_urls_to_videolinks(urls)
 
         # Re-read only the URLs we just added (they may have been filtered for dups)
@@ -1809,7 +1829,7 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
 
         # If user chose option 2 — also download thumbnails
         if ch == '2':
-            print(f"\n{C.CN}Downloading thumbnails for {label}...{C.E}")
+            print(f"\n  {C.CN}⟳  Downloading thumbnails for {C.W}{label}{C.E}{C.CN}...{C.E}")
             _download_thumbnails_for_urls(urls, channel_subdir)
 
         return
@@ -1823,28 +1843,32 @@ def mode_parse(km: KeyManager):
     if not user_in:
         return
 
-    print(f"{C.G}Resolving channel...{C.E}")
+    print(f"  {C.CN}⟳  Resolving channel...{C.E}")
     cid, ctitle = resolve_channel_id(km, user_in)
     if not cid:
-        print(f"{C.R}Channel not found.{C.E}")
+        print(f"  {C.R}✗  Channel not found.{C.E}")
         return
 
-    print(f"{C.G}Channel: {ctitle}  ({cid}){C.E}")
-    print(f"{C.CN}Fetching all videos (may take a while)...{C.E}")
+    _ui_separator()
+    print(f"  {C.DG}│{C.E} {C.G}{C.BO}Channel:{C.E}  {C.W}{ctitle}{C.E}  {C.DM}({cid}){C.E}")
+    _ui_separator()
+    print(f"  {C.CN}⟳  Fetching all videos (may take a while)...{C.E}")
 
     all_vids = fetch_all_channel_videos(km, cid)
     if not all_vids:
-        print(f"{C.Y}No videos found.{C.E}")
+        print(f"  {C.Y}⚠  No videos found.{C.E}")
         return
 
-    print(f"\n{C.G}Total videos fetched: {len(all_vids)}{C.E}")
-    print(f"{C.CN}Classifying long vs. shorts...{C.E}")
+    print(f"  {C.G}✓  Fetched {len(all_vids)} video(s){C.E}")
+    print(f"  {C.CN}⟳  Classifying long vs. shorts...{C.E}")
 
     longs, shorts = classify_videos(km, all_vids)
 
-    print(f"\n{C.BO}Results for {C.CN}{ctitle}{C.E}{C.BO}:{C.E}")
-    print(f"  {C.G}Long videos (>60 s):  {len(longs)}{C.E}")
-    print(f"  {C.Y}Shorts     (≤60 s):  {len(shorts)}{C.E}")
+    _ui_separator()
+    print(f"  {C.DG}│{C.E} {C.W}{C.BO}{ctitle}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.G}Long videos (>60 s): {C.W}{C.BO}{len(longs)}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.Y}Shorts     (≤60 s): {C.W}{C.BO}{len(shorts)}{C.E}")
+    _ui_separator()
 
     # ── Save to parsed/ ─────────────────────────────────────────────────
     os.makedirs(PARSED_DIR, exist_ok=True)
@@ -1864,8 +1888,8 @@ def mode_parse(km: KeyManager):
         for u in short_urls:
             f.write(u + '\n')
 
-    print(f"{C.G}Saved → {long_path}{C.E}")
-    print(f"{C.G}Saved → {short_path}{C.E}")
+    print(f"  {C.G}✓{C.E}  {C.DM}Saved → {long_path}{C.E}")
+    print(f"  {C.G}✓{C.E}  {C.DM}Saved → {short_path}{C.E}")
 
     # ── Post-parse download menu ─────────────────────────────────────────
     while True:
@@ -1880,22 +1904,22 @@ def mode_parse(km: KeyManager):
             return
         elif ch == '1':
             if not long_urls:
-                print(f"{C.Y}No long videos found on this channel.{C.E}")
+                print(f"  {C.Y}⚠  No long videos found on this channel.{C.E}")
                 continue
             _parse_download_submenu(long_urls, 'Long videos', f"{safe_name}_long")
         elif ch == '2':
             if not short_urls:
-                print(f"{C.Y}No shorts found on this channel.{C.E}")
+                print(f"  {C.Y}⚠  No shorts found on this channel.{C.E}")
                 continue
             _parse_download_submenu(short_urls, 'Shorts', f"{safe_name}_shorts")
         elif ch == '3':
             all_urls = long_urls + short_urls
             if not all_urls:
-                print(f"{C.Y}No videos found on this channel.{C.E}")
+                print(f"  {C.Y}⚠  No videos found on this channel.{C.E}")
                 continue
             _parse_download_submenu(all_urls, 'Long + Shorts', f"{safe_name}_all")
         else:
-            print(f"{C.Y}Invalid choice.{C.E}")
+            print(f"  {C.Y}Invalid choice.{C.E}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1905,12 +1929,12 @@ def mode_parse(km: KeyManager):
 def mode_download():
     """Read URLs from videolinks.txt and download them all."""
     if not os.path.exists(VIDEOLINKS):
-        print(f"{C.R}File not found: {VIDEOLINKS}{C.E}")
-        print(f"Create it and put one YouTube URL per line.")
+        print(f"  {C.R}✗  File not found: {VIDEOLINKS}{C.E}")
+        print(f"  {C.DM}Create it and put one YouTube URL per line.{C.E}")
         # Create an empty template
         with open(VIDEOLINKS, 'w', encoding='utf-8') as f:
             f.write("# Put one YouTube video URL per line\n")
-        print(f"{C.Y}Created empty template → {VIDEOLINKS}{C.E}")
+        print(f"  {C.Y}+  Created empty template → {VIDEOLINKS}{C.E}")
         return
 
     with open(VIDEOLINKS, 'r', encoding='utf-8') as f:
@@ -1918,12 +1942,14 @@ def mode_download():
                 if line.strip() and not line.strip().startswith('#')]
 
     if not urls:
-        print(f"{C.Y}No URLs in {VIDEOLINKS}{C.E}")
+        print(f"  {C.Y}⚠  No URLs in {VIDEOLINKS}{C.E}")
         return
 
-    print(f"\n{C.G}Found {len(urls)} URL(s) in videolinks.txt:{C.E}")
+    _ui_separator()
+    print(f"  {C.G}{C.BO}Found {len(urls)} URL(s) in videolinks.txt{C.E}")
     for i, u in enumerate(urls, 1):
-        print(f"  {i}. {u}")
+        print(f"  {C.DG}│{C.E} {C.DM}{i}.{C.E} {u}")
+    _ui_separator()
 
     _download_urls(urls, DOWNLOADS_DIR, from_videolinks=True)
 
@@ -1957,7 +1983,7 @@ def thumb_single(km: KeyManager):
     # Extract video ID
     m = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
     if not m:
-        print(f"{C.R}Could not extract video ID from URL.{C.E}")
+        print(f"  {C.R}✗  Could not extract video ID from URL.{C.E}")
         return
     vid = m.group(1)
 
@@ -1968,9 +1994,9 @@ def thumb_single(km: KeyManager):
     else:
         title = vid
 
-    print(f"{C.CN}Downloading thumbnail for: {title}{C.E}")
+    print(f"  {C.CN}⟳  Downloading thumbnail for: {C.W}{title}{C.E}")
     _download_single_thumbnail(vid, title)
-    print(f"{C.G}Done → {THUMBS_DIR}{C.E}")
+    print(f"  {C.G}✦  Done → {THUMBS_DIR}{C.E}")
 
 
 def thumb_channel(km: KeyManager):
@@ -1979,24 +2005,27 @@ def thumb_channel(km: KeyManager):
     if not user_in:
         return
 
-    print(f"{C.G}Resolving channel...{C.E}")
+    print(f"  {C.CN}⟳  Resolving channel...{C.E}")
     cid, ctitle = resolve_channel_id(km, user_in)
     if not cid:
-        print(f"{C.R}Channel not found.{C.E}")
+        print(f"  {C.R}✗  Channel not found.{C.E}")
         return
 
-    print(f"{C.G}Channel: {ctitle}{C.E}")
-    print(f"{C.CN}Fetching videos...{C.E}")
+    _ui_separator()
+    print(f"  {C.DG}│{C.E} {C.G}{C.BO}Channel:{C.E}  {C.W}{ctitle}{C.E}")
+    _ui_separator()
+    print(f"  {C.CN}⟳  Fetching videos...{C.E}")
 
     all_vids = fetch_all_channel_videos(km, cid)
     if not all_vids:
-        print(f"{C.Y}No videos found.{C.E}")
+        print(f"  {C.Y}⚠  No videos found.{C.E}")
         return
 
-    print(f"{C.G}Found {len(all_vids)} video(s). Downloading thumbnails...{C.E}")
+    print(f"  {C.G}✓  Found {len(all_vids)} video(s). Downloading thumbnails...{C.E}")
     os.makedirs(THUMBS_DIR, exist_ok=True)
 
     count = 0
+    total = len(all_vids)
     for v in all_vids:
         vid = v['videoId']
         title = safe_filename(v['title'])
@@ -2008,11 +2037,13 @@ def thumb_channel(km: KeyManager):
                 url = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                 urllib.request.urlretrieve(url, fname)
             count += 1
-            print(f"  {C.G}✓{C.E} {title}")
+            print(f"  {C.G}✓{C.E}  {C.DM}[{count}/{total}]{C.E}  {title}")
         except Exception as e:
-            print(f"  {C.R}✗ {vid}: {e}{C.E}")
+            print(f"  {C.R}✗  {C.DM}[{count+1}/{total}]{C.E}  {vid}: {e}{C.E}")
 
-    print(f"\n{C.G}Downloaded {count} thumbnail(s) → {THUMBS_DIR}{C.E}")
+    _ui_separator()
+    print(f"  {C.G}{C.BO}✦{C.E}  {C.G}Downloaded {count}/{total} thumbnail(s) → {THUMBS_DIR}{C.E}")
+    _ui_separator()
 
 
 def mode_thumbnails(km: KeyManager):
@@ -2071,7 +2102,7 @@ def main():
         elif choice == '0':
             break
         else:
-            print(f"  {C.Y}Invalid choice, try again.{C.E}")
+            print(f"  {C.Y}⚠  Invalid choice, try again.{C.E}")
 
     print(f"\n  {C.G}{C.BO}Goodbye! 👋{C.E}")
     input("  Press Enter to close...")
