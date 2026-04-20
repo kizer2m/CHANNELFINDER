@@ -17,6 +17,8 @@ import json
 import subprocess
 import urllib.request
 import msvcrt
+import time
+import threading
 from datetime import datetime, timedelta
 
 try:
@@ -168,6 +170,180 @@ def _ui_prompt() -> str:
 def _ui_status(icon: str, message: str, color: str = C.G):
     """Print a status line with icon."""
     print(f"  {color}{icon}{C.E}  {message}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STARTUP BANNER & ANIMATED LOADING
+# ═══════════════════════════════════════════════════════════════════════
+
+def _print_cfinder_banner():
+    """Print a large ASCII block-letter CFINDER banner (Gemini CLI style)."""
+    # Gradient colors for each row of the banner
+    g1 = '\033[38;5;39m'   # bright blue
+    g2 = '\033[38;5;38m'   # blue-cyan
+    g3 = '\033[38;5;44m'   # cyan
+    g4 = '\033[38;5;43m'   # teal
+    g5 = '\033[38;5;49m'   # green-cyan
+    g6 = '\033[38;5;48m'   # green
+    g7 = '\033[38;5;83m'   # bright green
+    g8 = '\033[38;5;84m'   # lime
+    r  = C.E
+
+    banner_lines = [
+        (g1, r"   ██████╗ ███████╗██╗███╗   ██╗██████╗ ███████╗██████╗ "),
+        (g2, r"  ██╔════╝ ██╔════╝██║████╗  ██║██╔══██╗██╔════╝██╔══██╗"),
+        (g3, r"  ██║      █████╗  ██║██╔██╗ ██║██║  ██║█████╗  ██████╔╝"),
+        (g4, r"  ██║      ██╔══╝  ██║██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗"),
+        (g5, r"  ╚██████╗ ██║     ██║██║ ╚████║██████╔╝███████╗██║  ██║"),
+        (g6, r"   ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝"),
+    ]
+
+    print()
+    for color, line in banner_lines:
+        print(f"{C.BO}{color}{line}{r}")
+
+    # Tagline under the banner
+    print(f"\n        {C.DM}{'─' * 44}{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.3.0{C.E}")
+    print(f"        {C.DM}{'─' * 44}{C.E}")
+    print()
+
+
+def _spinner_frames():
+    """Yield infinite sequence of spinner animation frames."""
+    frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    i = 0
+    while True:
+        yield frames[i % len(frames)]
+        i += 1
+
+
+def _progress_bar_str(progress: float, width: int = 30, filled_color: str = '',
+                      empty_color: str = '') -> str:
+    """Build a gradient progress bar string. progress is 0.0-1.0."""
+    fc = filled_color or '\033[38;5;44m'  # cyan
+    ec = empty_color  or C.DG
+    filled = int(width * progress)
+    empty  = width - filled
+    bar = f"{fc}{'━' * filled}{ec}{'─' * empty}{C.E}"
+    return bar
+
+
+def _animated_startup():
+    """
+    Run the animated startup sequence:
+    1. Check / install dependencies with animated progress
+    2. Update yt-dlp with spinner
+    3. Validate environment
+    Shows real-time progress with beautiful graphics.
+    """
+    # ── Phase 1: Dependency check ────────────────────────────────────
+    deps = [
+        ('google-api-python-client', 'Google API Client'),
+        ('yt-dlp',                   'yt-dlp downloader'),
+    ]
+
+    g_cyan  = '\033[38;5;44m'
+    g_green = '\033[38;5;49m'
+    g_blue  = '\033[38;5;39m'
+
+    print(f"  {g_blue}{C.BO}⬢{C.E}  {C.W}{C.BO}Installing | updating dependencies...{C.E}")
+    print(f"  {C.DM}{'─' * 46}{C.E}\n")
+
+    for idx, (pkg, label) in enumerate(deps):
+        # Animate progress bar filling up
+        total_steps = 20
+        for step in range(total_steps + 1):
+            progress = step / total_steps
+            bar = _progress_bar_str(progress, 30, g_cyan if idx == 0 else g_green)
+            pct = int(progress * 100)
+            spinner = next(_spinner_gen)
+            status_text = 'checking' if step < total_steps // 2 else 'updating'
+            print(f"\r  {g_cyan}{spinner}{C.E}  {C.W}{label}{C.E}  {bar}  {C.DM}{pct:3d}%{C.E}  {C.DG}{status_text}{C.E}   ", end='', flush=True)
+            time.sleep(0.02)
+
+        # Actually check / update the package
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--upgrade', pkg],
+                capture_output=True, text=True, timeout=60,
+            )
+            if 'Successfully installed' in result.stdout:
+                ver = ''
+                for word in result.stdout.split():
+                    if pkg.replace('-', '') in word.replace('-', '').lower():
+                        ver = word
+                        break
+                status_icon = f"{C.G}{C.BO}✓{C.E}"
+                status_msg  = f"{C.G}updated{C.E}" + (f" {C.DM}({ver}){C.E}" if ver else '')
+            else:
+                status_icon = f"{C.G}{C.BO}✓{C.E}"
+                status_msg  = f"{C.G}up to date{C.E}"
+        except Exception as e:
+            status_icon = f"{C.Y}{C.BO}⚠{C.E}"
+            status_msg  = f"{C.Y}skipped ({e}){C.E}"
+
+        bar_done = _progress_bar_str(1.0, 30, g_green)
+        print(f"\r  {status_icon}  {C.W}{label}{C.E}  {bar_done}  {C.DM}100%{C.E}  {status_msg}           ")
+
+    # ── Phase 2: Environment check ───────────────────────────────────
+    print(f"\n  {g_blue}{C.BO}⬢{C.E}  {C.W}{C.BO}Checking environment...{C.E}")
+    print(f"  {C.DM}{'─' * 46}{C.E}")
+
+    env_items = [
+        ('thumbnails/',    THUMBS_DIR,    'dir'),
+        ('downloads/',     DOWNLOADS_DIR, 'dir'),
+        ('parsed/',        PARSED_DIR,    'dir'),
+        ('videolinks.txt', VIDEOLINKS,    'file'),
+        ('find.txt',       OUTPUT_FILE,   'file'),
+        ('api_keys.txt',   API_KEYS_FILE, 'file'),
+    ]
+
+    for name, path, kind in env_items:
+        # Small animation per item
+        for step in range(8):
+            spinner = next(_spinner_gen)
+            print(f"\r  {g_cyan}{spinner}{C.E}  {C.DM}Scanning {name}...{C.E}    ", end='', flush=True)
+            time.sleep(0.015)
+
+        exists = os.path.isdir(path) if kind == 'dir' else os.path.isfile(path)
+        created = False
+
+        if not exists:
+            if kind == 'dir':
+                os.makedirs(path, exist_ok=True)
+                created = True
+            elif name == 'videolinks.txt':
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write('# Put one YouTube video URL per line\n')
+                created = True
+            elif name == 'find.txt':
+                with open(path, 'w', encoding='utf-8') as f:
+                    pass
+                created = True
+            elif name == 'api_keys.txt':
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write('# Paste your YouTube Data API v3 key(s) here, one per line\n')
+                    f.write('# Example:\n')
+                    f.write('# AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n')
+                created = True
+
+        if created:
+            icon = f"{C.Y}{C.BO}+{C.E}"
+            msg  = f"{C.Y}created{C.E}"
+        else:
+            icon = f"{C.G}✓{C.E}"
+            msg  = f"{C.DM}ok{C.E}"
+        print(f"\r  {icon}  {C.W}{name:<18}{C.E} {msg}           ")
+
+    # ── Phase 3: Finalize ────────────────────────────────────────────
+    print(f"\n  {C.DM}{'─' * 46}{C.E}")
+    print(f"  {g_green}{C.BO}✦{C.E}  {C.G}{C.BO}Environment ready!{C.E}")
+    print()
+
+
+# Global spinner generator
+_spinner_gen = _spinner_frames()
 
 
 def safe_filename(name: str) -> str:
@@ -518,7 +694,7 @@ def _pick_quality() -> dict:
     _ui_menu_item('2', '720p', C.CN, 'MP4')
     _ui_menu_item('3', '480p', C.CN, 'MP4')
     _ui_menu_item('4', 'Audio only', C.Y, 'MP3 192kbps')
-    _ui_menu_item('5', 'Ultra High', C.H, '4K / 8K')
+    _ui_menu_item('5', 'Ultra High', C.H, '4K | 8K')
     q = _ui_prompt()
 
     opts = {}
@@ -740,7 +916,7 @@ def _pick_cookie_source() -> dict:
     Returns a dict of yt-dlp options to merge, plus a special key
     '_cookie_mode' = 'none' | 'browser' | 'file' for retry logic.
     """
-    _ui_header('Cookies / Authentication', C.Y)
+    _ui_header('Cookies | Authentication', C.Y)
     print(f"  {C.DM}YouTube may block downloads without authentication.{C.E}\n")
     _ui_menu_item('1', 'No cookies', C.CN, 'try without auth')
     _ui_menu_item('2', 'Use cookies from browser', C.CN)
@@ -1860,11 +2036,13 @@ def mode_thumbnails(km: KeyManager):
 def main():
     os.system('')  # enable ANSI colours on Windows
 
-    _ui_banner('YouTube Channel Finder  v4.3.0', 52, C.H)
+    # ── Gemini CLI-style ASCII banner ──
+    _print_cfinder_banner()
 
-    _ui_header('Startup', C.CN)
-    check_updates()
-    ensure_environment()
+    # ── Animated dependency loading + environment check ──
+    _animated_startup()
+
+    # ── Load API keys (still uses original styled output) ──
     km = KeyManager(API_KEYS_FILE)
     check_key_quotas(km)
 
