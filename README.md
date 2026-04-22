@@ -1,6 +1,6 @@
-# YouTube Channel Finder v4.4.0
+# YouTube Channel Finder v4.5.0
 
-A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
+A powerful **cross-platform** command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation. Runs on **Windows, macOS, and Linux** with no platform-specific dependencies.
 
 ---
 
@@ -277,6 +277,14 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.5.0 (2026-04-22)
+- **Cross-platform support** — script now runs on **Windows, macOS, and Linux** without modification:
+  - Replaced the Windows-only `import msvcrt` with a platform-conditional `_getch()` helper
+  - **Windows**: delegates to `msvcrt.getch()` — behavior unchanged
+  - **macOS / Linux**: uses `tty` + `termios` from the Python standard library to enter raw mode, read one keypress, and restore the terminal — no extra packages required
+  - Fixes `ModuleNotFoundError: No module named 'msvcrt'` on non-Windows systems
+- Version bump: `4.4.0` → `4.5.0`
 
 ### v4.4.0 (2026-04-22)
 - **Multi-phase CStyle download UI** — download progress now shows separate styled lines for each stream/phase:
