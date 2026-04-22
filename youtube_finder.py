@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.4.0
+YouTube Channel Finder v4.5.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -16,7 +16,29 @@ import urllib.parse
 import json
 import subprocess
 import urllib.request
-import msvcrt
+import platform
+
+# ── Cross-platform single-keypress read ──────────────────────────────────────
+if platform.system() == 'Windows':
+    import msvcrt as _msvcrt
+
+    def _getch() -> bytes:
+        """Read one keypress without echoing (Windows)."""
+        return _msvcrt.getch()
+else:
+    import tty
+    import termios
+
+    def _getch() -> bytes:
+        """Read one keypress without echoing (macOS / Linux)."""
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            return ch.encode('utf-8', errors='replace')
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 import time
 import threading
 from datetime import datetime, timedelta
@@ -204,7 +226,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.4.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.5.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -640,7 +662,7 @@ def display_results_paginated(results: list, ch_stats: dict, page_size: int = 25
 
             # Wait for keypress
             while True:
-                key = msvcrt.getch()
+                key = _getch()
                 if key == b' ':     # Space
                     break
                 elif key == b'\x1b':  # Escape
