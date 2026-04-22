@@ -913,6 +913,8 @@ def _validate_cookie_file(cfile: str) -> bool:
         'cookiefile': cfile,
         'logger': _YtLogger(),
         'skip_download': True,
+        'js_runtimes': {'node': {}},
+        'remote_components': ['ejs:github'],
     }
     try:
         with YoutubeDL(opts) as ydl:
@@ -1066,7 +1068,6 @@ class _YtLogger:
         'cookies are no longer valid',
         'cookies have likely been rotated',
         'sign in',
-        'no supported javascript',
     ]
 
     def debug(self, msg):
@@ -1344,7 +1345,7 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
         'windowsfilenames': True,
         'restrictfilenames': False,
         'quiet':            True,
-        'no_warnings':      False,    # let _YtLogger filter selectively
+        'no_warnings':      True,     # suppress stderr; _YtLogger filters selectively
         'noprogress':       True,
         'logger':           _YtLogger(),
         'progress_hooks':   [_progress_hook],
