@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.3.0
+YouTube Channel Finder v4.4.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -204,7 +204,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.3.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.4.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -1063,58 +1063,247 @@ class _YtLogger:
         print(f"{C.R}  ERROR: {msg}{C.E}")
 
 
+
+# ── Download phase tracker ──────────────────────────────────────────────
+# Tracks which stream (video/audio) is currently being downloaded.
+# yt-dlp downloads video and audio separately; we detect the type from
+# the info_dict fields and render a labelled progress line for each.
+_dl_phase = {
+    'stream_index': 0,       # 0 = first stream (video), 1 = second (audio)
+    'last_was_finished': False,
+    'video_done': False,
+    'audio_done': False,
+    'merge_done': False,
+    'pp_done': set(),          # tracks which pp phases already displayed 'finished'
+}
+
+def _dl_phase_reset():
+    """Reset download phase tracker before each URL."""
+    _dl_phase['stream_index'] = 0
+    _dl_phase['last_was_finished'] = False
+    _dl_phase['video_done'] = False
+    _dl_phase['audio_done'] = False
+    _dl_phase['merge_done'] = False
+    _dl_phase['pp_done'] = set()
+
+
+def _detect_stream_type(d: dict) -> str:
+    """Detect whether the current yt-dlp download fragment is video or audio."""
+    info = d.get('info_dict', {})
+    # yt-dlp sets 'vcodec' / 'acodec' on individual format fragments
+    vcodec = info.get('vcodec', 'none') or 'none'
+    acodec = info.get('acodec', 'none') or 'none'
+    has_video = vcodec != 'none'
+    has_audio = acodec != 'none'
+    # If it has video (with or without audio) → video stream
+    if has_video:
+        return 'video'
+    # Pure audio stream
+    if has_audio:
+        return 'audio'
+    # Fallback: use stream_index (first = video, second = audio)
+    return 'video' if _dl_phase['stream_index'] == 0 else 'audio'
+
+
+# ── Phase display config ────────────────────────────────────────────────
+_PHASE_CFG = {
+    'video': {
+        'icon': '►',
+        'label': 'Video',
+        'label_done': 'Video',
+        'label_color': C.H,          # magenta
+        'bar_color': '\033[38;5;40m', # bright green
+        'done_color': C.G,
+    },
+    'audio': {
+        'icon': '♫',
+        'label': 'Audio',
+        'label_done': 'Audio',
+        'label_color': C.CN,          # cyan
+        'bar_color': '\033[38;5;39m', # bright blue/cyan
+        'done_color': '\033[38;5;39m',
+    },
+    'merge': {
+        'icon': '⊕',
+        'label': 'Merging',
+        'label_done': 'Merged',
+        'label_color': C.Y,           # yellow
+        'bar_color': '\033[38;5;40m', # green
+        'done_color': C.G,
+    },
+    'convert': {
+        'icon': '⊛',
+        'label': 'Converting',
+        'label_done': 'Converted',
+        'label_color': C.W,           # white
+        'bar_color': '\033[38;5;44m', # cyan-teal
+        'done_color': '\033[38;5;44m',
+    },
+    'extract': {
+        'icon': '♪',
+        'label': 'Extracting',
+        'label_done': 'Extracted',
+        'label_color': C.H,           # magenta
+        'bar_color': '\033[38;5;201m', # magenta-pink
+        'done_color': '\033[38;5;201m',
+    },
+}
+
+
+# ── Label alignment ─────────────────────────────────────────────────────
+_LABEL_WIDTH = 10   # Longest label: "Converting" / "Extracting" = 10 chars
+
+# ── Postprocessor animation ─────────────────────────────────────────────
+# Background thread that animates the progress bar while FFmpeg processes.
+# yt-dlp only fires 'started' and 'finished' — no intermediate progress —
+# so we simulate a smooth fill from 0→95% and snap to 100% on completion.
+
+_pp_anim = {
+    'stop_event': None,   # threading.Event — set to stop animation
+    'thread': None,       # animation thread reference
+}
+
+
+def _pp_animate(cfg: dict, bar_width: int, stop_event: threading.Event):
+    """Background animation loop for post-processing phases."""
+    progress = 0.0
+    # Ease-out: fast at start, slows towards 95%
+    while not stop_event.is_set() and progress < 0.95:
+        spinner = next(_spinner_gen)
+        bar = _progress_bar_str(progress, bar_width, cfg['bar_color'], C.DG)
+        pct_str = f"{progress * 100:5.1f}%"
+        padded = cfg['label'].ljust(_LABEL_WIDTH)
+        print(f"\r  {cfg['bar_color']}{spinner}{C.E}  "
+              f"{cfg['label_color']}{cfg['icon']} {padded}{C.E}  "
+              f"{bar}  {C.DM}{pct_str}{C.E}   ",
+              end='', flush=True)
+        # Ease-out increment: slows as we approach 95%
+        remaining = 0.95 - progress
+        progress += remaining * 0.08
+        stop_event.wait(0.1)  # ~10 FPS, exits immediately if stop_event is set
+
+
+def _format_eta(seconds) -> str:
+    """Format ETA seconds into mm:ss or hh:mm:ss string."""
+    if seconds is None or seconds < 0:
+        return '?'
+    s = int(seconds)
+    if s >= 3600:
+        return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
 def _progress_hook(d):
-    """Styled progress bar for yt-dlp downloads — matches startup bar style."""
-    g_dl = '\033[38;5;44m'   # cyan-teal (same as startup)
-    g_ok = '\033[38;5;49m'   # green-cyan (done state)
+    """Styled, labelled progress bar for yt-dlp downloads.
+
+    Shows per-stream lines with percent, speed, and ETA:
+      ⠹  ► Video  ━━━━━━━━━━━━────────  62.5%  12.3 MB/s  ETA 00:04
+      ✓  ► Video  ━━━━━━━━━━━━━━━━━━━━  100%
+      ⠹  ♫ Audio  ━━━━━━━━────────────  45.0%   5.1 MB/s  ETA 00:02
+      ✓  ♫ Audio  ━━━━━━━━━━━━━━━━━━━━  100%
+    """
+    stream_type = _detect_stream_type(d)
+    cfg = _PHASE_CFG.get(stream_type, _PHASE_CFG['video'])
+    bar_width = 28
 
     if d['status'] == 'downloading':
+        _dl_phase['last_was_finished'] = False
         total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
         downloaded = d.get('downloaded_bytes', 0)
         speed = d.get('speed')
         eta = d.get('eta')
+        pct = (downloaded / total) if total > 0 else 0.0
 
-        if total > 0:
-            pct = downloaded / total
-        else:
-            pct = 0.0
-
-        bar = _progress_bar_str(pct, 36, g_dl, C.DG)
-        pct_str = f"{pct * 100:5.1f}%"
-        speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else '?'
-        eta_str   = f"{eta}s" if eta else '?'
-
+        bar = _progress_bar_str(pct, bar_width, cfg['bar_color'], C.DG)
         spinner = next(_spinner_gen)
-        print(f"\r  {g_dl}{spinner}{C.E}  {bar}  {C.DM}{pct_str}{C.E}  {C.DG}{speed_str}  ETA {eta_str}{C.E}   ",
+        pct_str = f"{pct * 100:5.1f}%"
+        speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else ''
+        eta_str = f"ETA {_format_eta(eta)}" if eta else ''
+
+        padded = cfg['label'].ljust(_LABEL_WIDTH)
+        print(f"\r  {cfg['bar_color']}{spinner}{C.E}  "
+              f"{cfg['label_color']}{cfg['icon']} {padded}{C.E}  "
+              f"{bar}  {C.DM}{pct_str}{C.E}  "
+              f"{C.DG}{speed_str}  {eta_str}{C.E}   ",
               end='', flush=True)
 
     elif d['status'] == 'finished':
-        total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-        size_str = f"{total / 1024 / 1024:.1f} MB" if total else '? MB'
-        bar_done = _progress_bar_str(1.0, 36, g_ok)
-        print(f"\r  {C.G}{C.BO}✓{C.E}  {bar_done}  {C.DM}100.0%{C.E}  {C.G}{size_str}  Done!{C.E}          ")
+        bar_done = _progress_bar_str(1.0, bar_width, cfg['done_color'])
+        padded = cfg.get('label_done', cfg['label']).ljust(_LABEL_WIDTH)
+        print(f"\r  {C.G}{C.BO}✓{C.E}  "
+              f"{cfg['label_color']}{cfg['icon']} {padded}{C.E}  "
+              f"{bar_done}  {C.G}100%{C.E}                              ")
+        # Mark phase as done and advance stream index
+        _dl_phase[f'{stream_type}_done'] = True
+        _dl_phase['stream_index'] += 1
+        _dl_phase['last_was_finished'] = True
 
 
 def _postprocessor_hook(d):
-    """Show clean messages for post-processing steps."""
-    g_dl = '\033[38;5;44m'
-    g_ok = '\033[38;5;49m'
-    if d['status'] == 'started':
-        pp = d.get('postprocessor', '')
+    """Animated post-processing progress with real-time bar movement.
+
+    On 'started': spawns background thread animating progress 0→95%
+      ⠹  ⚙Converting  ━━━━━━━━━━━━━━──────────────  52.3%
+    On 'finished': stops animation, overwrites with done state
+      ✓  ⚙Converted   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  100%
+    """
+    bar_width = 28
+
+    def _resolve_pp_phase(pp: str) -> str | None:
         if 'Merger' in pp:
-            print(f"  {g_dl}⟳{C.E}  {C.W}Merging audio + video...{C.E}")
-        elif 'VideoConvertor' in pp or 'VideoRemuxer' in pp:
-            print(f"  {g_dl}⟳{C.E}  {C.W}Converting to MP4...{C.E}")
-        elif 'ExtractAudio' in pp:
-            print(f"  {g_dl}⟳{C.E}  {C.W}Extracting audio (MP3)...{C.E}")
-    elif d['status'] == 'finished':
-        pp = d.get('postprocessor', '')
+            return 'merge'
         if 'VideoConvertor' in pp or 'VideoRemuxer' in pp:
-            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Converted to MP4{C.E}")
-        elif 'FFmpegExtractAudio' in pp:
-            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Audio extracted (MP3){C.E}")
-        elif 'Merger' in pp:
-            print(f"  {C.G}{C.BO}✓{C.E}  {C.G}Merged successfully{C.E}")
+            return 'convert'
+        if 'ExtractAudio' in pp or 'FFmpegExtractAudio' in pp:
+            return 'extract'
+        return None
+
+    pp = d.get('postprocessor', '')
+    phase = _resolve_pp_phase(pp)
+    if phase is None:
+        return
+
+    cfg = _PHASE_CFG[phase]
+
+    if d['status'] == 'started':
+        # Skip if this phase already completed (e.g. VideoRemuxer + VideoConvertor)
+        if phase in _dl_phase['pp_done']:
+            return
+        # Stop any previous animation
+        if _pp_anim['stop_event'] is not None:
+            _pp_anim['stop_event'].set()
+            if _pp_anim['thread'] and _pp_anim['thread'].is_alive():
+                _pp_anim['thread'].join(timeout=1)
+        # Start new animation thread
+        stop_evt = threading.Event()
+        _pp_anim['stop_event'] = stop_evt
+        t = threading.Thread(target=_pp_animate, args=(cfg, bar_width, stop_evt),
+                             daemon=True)
+        _pp_anim['thread'] = t
+        t.start()
+
+    elif d['status'] == 'finished':
+        # Skip if this phase already completed
+        if phase in _dl_phase['pp_done']:
+            # Still stop any running animation
+            if _pp_anim['stop_event'] is not None:
+                _pp_anim['stop_event'].set()
+            return
+        # Stop animation thread
+        if _pp_anim['stop_event'] is not None:
+            _pp_anim['stop_event'].set()
+            if _pp_anim['thread'] and _pp_anim['thread'].is_alive():
+                _pp_anim['thread'].join(timeout=2)
+            _pp_anim['stop_event'] = None
+            _pp_anim['thread'] = None
+        # Overwrite with done state (label changes: Converting→Converted etc.)
+        label_done = cfg.get('label_done', cfg['label'])
+        bar_done = _progress_bar_str(1.0, bar_width, cfg['done_color'])
+        padded = label_done.ljust(_LABEL_WIDTH)
+        print(f"\r  {C.G}{C.BO}✓{C.E}  "
+              f"{cfg['label_color']}{cfg['icon']} {padded}{C.E}  "
+              f"{bar_done}  {C.G}100%{C.E}                              ")
+        _dl_phase['pp_done'].add(phase)
 
 
 def _is_bot_error(msg: str) -> bool:
@@ -1187,6 +1376,8 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     print(f"  {C.DG}│{C.E} {C.DM}[{i}/{total}]{C.E}  {C.W}{C.BO}{title}{C.E}")
     print(f"  {C.DG}│{C.E}  {C.DM}→ {out_dir}{C.E}")
     _ui_separator()
+    # Reset phase tracker for this URL (video → audio → merge)
+    _dl_phase_reset()
     # download() runs the full pipeline: format selection + download + post-process
     ydl.download([url])
     # For metadata, re-fetch with full processing (no download) to get resolved fields
