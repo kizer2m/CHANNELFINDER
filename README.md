@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.3.0
+# YouTube Channel Finder v4.4.0
 
 A powerful command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation.
 
@@ -78,10 +78,11 @@ A powerful command-line tool for searching YouTube videos, parsing channels, dow
   - If downloading fails due to a bot-detection block, the tool automatically retries blocked videos with browser cookies
 - **Auto-remove completed URLs**: each URL is removed from `videolinks.txt` immediately after a successful download, so interrupted sessions resume cleanly from where they left off
 - **JavaScript challenge solver** — uses Node.js + EJS remote component to decrypt YouTube stream URLs (required since 2025; without it only storyboard thumbnails are available)
-- **Clean download UI**:
-  - Green progress bar with speed and ETA
-  - Shows only actionable warnings (cookie expiry, JS runtime issues)
-  - Critical errors always shown
+- **CStyle Console download UI**:
+  - Separate progress lines for each stream: `► Video`, `♫ Audio`
+  - Post-processing phases with animated progress: `⊕ Merging`, `⊛ Converting`, `♪ Extracting`
+  - Real-time speed (MB/s) and ETA display
+  - Spinner animation, phase-aware icons, and `✓` checkmark on completion
 - Saves full video metadata to a `.txt` file per video (title, channel, views, likes, tags, description, etc.)
 - Handles duplicate titles by appending `[videoId]` to filenames
 
@@ -276,6 +277,20 @@ CHANNELFINDER/
 ---
 
 ## Changelog
+
+### v4.4.0 (2026-04-22)
+- **Multi-phase CStyle download UI** — download progress now shows separate styled lines for each stream/phase:
+  - `► Video` (magenta label, green progress bar) with real-time percent, speed (MB/s), ETA
+  - `♫ Audio` (cyan label, blue progress bar) with real-time percent, speed, ETA
+  - `⊕ Merging` → `⊕ Merged` (yellow label, green bar) with animated spinner and progress
+  - `⊛ Converting` → `⊛ Converted` (white label, cyan-teal bar) with animated spinner
+  - `♪ Extracting` → `♪ Extracted` (magenta label, pink bar) with animated spinner
+- **Animated postprocessor progress** — background thread fills progress bar 0→95% with ease-out curve while FFmpeg processes; spinner rotates at ~10 FPS; snaps to ✓ + 100% on completion
+- **Label alignment** — all phase labels padded to equal width (`_LABEL_WIDTH = 10`) so progress bars start at the same column regardless of label length
+- **Active/done labels** — gerund while processing (`Converting`, `Merging`, `Extracting`) and past tense on completion (`Converted`, `Merged`, `Extracted`)
+- **Phase deduplication** — prevents duplicate display when yt-dlp fires both `VideoRemuxer` and `VideoConvertor` for the same file
+- **Single-width icons** — replaced `⚙` (emoji, renders double-width in Windows Terminal) with `⊛` (math operator, guaranteed single-width) for consistent alignment
+- Version bump: `4.3.0` → `4.4.0`
 
 ### v4.3.0 (2026-04-20)
 - **Beautiful UI overhaul** — every menu, header, and prompt across the entire CLI has been redesigned with a consistent, visually polished style:
