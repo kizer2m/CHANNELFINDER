@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.5.0
+# YouTube Channel Finder v4.6.0
 
 A powerful **cross-platform** command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation. Runs on **Windows, macOS, and Linux** with no platform-specific dependencies.
 
@@ -91,6 +91,17 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
 - **Entire channel**: paste a channel URL or `@handle` → downloads all video thumbnails
 - Thumbnails saved as `Title [videoId].jpg` (max-res with fallback to HQ)
 - All saved to `thumbnails/` folder
+
+### ▶️ Mode 6 — Playlist Parser
+- Paste any YouTube playlist URL (`?list=PL...`) or raw playlist ID
+- Fetches **all accessible videos** in the playlist via `playlistItems` API (1 quota unit/page)
+- Skips deleted and private videos automatically
+- Displays a **preview** of the first 5 videos with position numbers and full count
+- Saves the full URL list to `parsed/<PlaylistName>_playlist.txt` with header metadata
+- **Post-parse action menu:**
+  1. **Download videos** — full quality/cookie selection (same as Mode 4: 1080p/720p/480p/MP3/Ultra HD)
+  2. **Download thumbnails** — saves all thumbnails to `thumbnails/<PlaylistName>/` (max-res with HQ fallback, named `Title [videoId].jpg`)
+  3. **Back to main menu**
 
 ### 🔑 API Key Management
 - Keys stored in `api_keys.txt` (one per line)
@@ -278,7 +289,7 @@ CHANNELFINDER/
 
 ## Version
 
-Current version: **v4.5.0**
+Current version: **v4.6.0**
 
 > Detailed change history is maintained in `GEMINI.md` and `CLAUDE.md` (AI session context files, not tracked in git).
 

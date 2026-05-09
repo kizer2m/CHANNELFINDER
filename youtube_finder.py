@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.5.0
+YouTube Channel Finder v4.6.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
   Mode 4 — Batch download from videolinks.txt (re-encode to MP4 + metadata)
   Mode 5 — Download thumbnails
+  Mode 6 — Playlist Parser (parse playlist → download videos / thumbnails)
 """
 
 import os
@@ -226,7 +227,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.5.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -2278,6 +2279,178 @@ def mode_thumbnails(km: KeyManager):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  MODE 6 — PLAYLIST PARSER
+# ═══════════════════════════════════════════════════════════════════════
+
+def _extract_playlist_id(user_input: str):
+    """
+    Extract a YouTube playlist ID from a URL or raw ID.
+    Accepts:
+      https://www.youtube.com/playlist?list=PLxxxxxxxx
+      https://www.youtube.com/watch?v=xxx&list=PLxxxxxxxx
+      PLxxxxxxxx  (raw ID)
+    Returns playlist_id string or None.
+    """
+    user_input = user_input.strip()
+    m = re.search(r'[?&]list=([A-Za-z0-9_-]+)', user_input)
+    if m:
+        return m.group(1)
+    # Raw playlist ID: starts with PL, UU, RD, FL, etc.
+    if re.match(r'^[A-Za-z]{2}[A-Za-z0-9_-]{10,}$', user_input):
+        return user_input
+    return None
+
+
+def _fetch_playlist_info(km, playlist_id: str):
+    """
+    Fetch playlist title and total video count.
+    Returns (title, item_count) or (playlist_id, '?') on failure.
+    """
+    resp = api_call(km, lambda yt: yt.playlists().list(
+        part='snippet,contentDetails', id=playlist_id))
+    if resp and resp.get('items'):
+        item = resp['items'][0]
+        title = item['snippet'].get('title', playlist_id)
+        count = item.get('contentDetails', {}).get('itemCount', '?')
+        return title, count
+    return playlist_id, '?'
+
+
+def fetch_playlist_videos(km, playlist_id: str) -> list:
+    """
+    Fetch ALL videos from a playlist via playlistItems().list() with pagination.
+    Returns list of dicts: {videoId, title, publishedAt, position}.
+    Costs 1 quota unit per page (50 items).
+    """
+    videos = []
+    page_token = None
+
+    while True:
+        def req(yt, pt=page_token):
+            params = dict(part='snippet,contentDetails',
+                          playlistId=playlist_id,
+                          maxResults=50)
+            if pt:
+                params['pageToken'] = pt
+            return yt.playlistItems().list(**params)
+
+        resp = api_call(km, req)
+        if not resp:
+            break
+
+        for it in resp.get('items', []):
+            sn = it.get('snippet', {})
+            cd = it.get('contentDetails', {})
+            vid = sn.get('resourceId', {}).get('videoId') or cd.get('videoId')
+            if not vid:
+                continue
+            # Skip deleted / private videos
+            title = sn.get('title', '')
+            if title in ('Deleted video', 'Private video'):
+                continue
+            videos.append(dict(
+                videoId=vid,
+                title=title,
+                publishedAt=sn.get('publishedAt', ''),
+                position=sn.get('position', len(videos)),
+            ))
+
+        page_token = resp.get('nextPageToken')
+        if not page_token:
+            break
+        print(f"  {C.DM}⟳  Fetched {len(videos)} so far...{C.E}")
+
+    return videos
+
+
+def _print_playlist_summary(title: str, playlist_id: str, videos: list):
+    """Print a styled summary block for the parsed playlist."""
+    _ui_separator()
+    print(f"  {C.DG}│{C.E} {C.CN}{C.BO}Playlist :{C.E} {C.W}{title}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.CN}ID       :{C.E} {C.DM}{playlist_id}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.CN}Videos   :{C.E} {C.G}{C.BO}{len(videos)}{C.E} {C.DM}(accessible){C.E}")
+    _ui_separator()
+    # Show first 5 as preview
+    preview = videos[:5]
+    for v in preview:
+        pos = v.get('position', 0) + 1
+        t = v['title'][:60] + ('...' if len(v['title']) > 60 else '')
+        print(f"  {C.DG}│{C.E} {C.DM}{pos:3}.{C.E} {t}")
+    if len(videos) > 5:
+        print(f"  {C.DG}│{C.E}  {C.DM}... and {len(videos) - 5} more{C.E}")
+    _ui_separator()
+    print()
+
+
+def mode_playlist(km):
+    """Playlist Parser mode — parse a playlist then offer download options."""
+    _ui_banner('Playlist Parser', 52, C.H)
+    print(f"  {C.DM}Paste a YouTube playlist URL or ID{C.E}")
+    print(f"  {C.DG}│{C.E} {C.DM}Example: https://youtube.com/playlist?list=PLxxxxxx{C.E}")
+    print(f"  {C.DG}│{C.E} {C.DM}         PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{C.E}\n")
+    user_in = input(f"  {C.CN}›{C.E} ").strip()
+    if not user_in:
+        return
+
+    playlist_id = _extract_playlist_id(user_in)
+    if not playlist_id:
+        print(f"  {C.R}✗  Could not extract a playlist ID from that input.{C.E}")
+        print(f"  {C.Y}  Make sure the URL contains ?list= or paste the raw PL... ID.{C.E}")
+        return
+
+    # ── Fetch playlist metadata ─────────────────────────────────────────
+    print(f"  {C.CN}⟳  Fetching playlist info...{C.E}")
+    pl_title, pl_count = _fetch_playlist_info(km, playlist_id)
+
+    print(f"  {C.CN}⟳  Fetching all videos in playlist{C.E} {C.DM}(reported: {pl_count}){C.E}{C.CN}...{C.E}")
+    videos = fetch_playlist_videos(km, playlist_id)
+
+    if not videos:
+        print(f"  {C.Y}⚠  No accessible videos found in this playlist.{C.E}")
+        return
+
+    _print_playlist_summary(pl_title, playlist_id, videos)
+
+    urls = [f"https://www.youtube.com/watch?v={v['videoId']}" for v in videos]
+    safe_name = safe_filename(pl_title)
+    thumb_subdir = safe_name or playlist_id
+
+    # ── Save playlist URLs to parsed/ ───────────────────────────────────
+    os.makedirs(PARSED_DIR, exist_ok=True)
+    playlist_file = os.path.join(PARSED_DIR, f"{safe_name or playlist_id}_playlist.txt")
+    with open(playlist_file, 'w', encoding='utf-8') as f:
+        f.write(f"# Playlist: {pl_title}\n")
+        f.write(f"# ID: {playlist_id}\n")
+        f.write(f"# Parsed: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+        f.write(f"# Total: {len(videos)} videos\n\n")
+        for v in videos:
+            f.write(f"https://www.youtube.com/watch?v={v['videoId']}\n")
+    print(f"  {C.G}✓{C.E}  {C.DM}Saved → {playlist_file}{C.E}\n")
+
+    # ── Post-parse menu ─────────────────────────────────────────────────
+    while True:
+        _ui_header(f'Playlist Actions  [{len(videos)} videos]', C.G)
+        _ui_menu_item('1', 'Download videos', C.G, 'MP4 | MP3 — quality + cookies')
+        _ui_menu_item('2', 'Download thumbnails', C.CN,
+                      f'→ thumbnails/{thumb_subdir}/')
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
+
+        if ch == '0':
+            return
+
+        elif ch == '1':
+            _download_urls(urls, DOWNLOADS_DIR)
+
+        elif ch == '2':
+            print(f"\n  {C.CN}⟳  Downloading {len(urls)} thumbnail(s)...{C.E}")
+            _download_thumbnails_for_urls(urls, thumb_subdir)
+
+        else:
+            print(f"  {C.Y}⚠  Invalid choice.{C.E}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  MAIN MENU
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2301,6 +2474,7 @@ def main():
         _ui_menu_item('3', 'Parse channel (long | shorts)', C.H, '📊')
         _ui_menu_item('4', 'Download from videolinks.txt', C.Y, '📥')
         _ui_menu_item('5', 'Download thumbnails', C.B, '🖼️')
+        _ui_menu_item('6', 'Playlist Parser', C.H, '▶️  parse & download playlist')
         _ui_separator()
         _ui_menu_back('0', 'Exit')
 
@@ -2316,6 +2490,8 @@ def main():
             mode_download()
         elif choice == '5':
             mode_thumbnails(km)
+        elif choice == '6':
+            mode_playlist(km)
         elif choice == '0':
             break
         else:
