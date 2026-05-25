@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.6.1
+# YouTube Channel Finder v4.6.2
 
 A powerful **cross-platform** command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation. Runs on **Windows, macOS, and Linux** with no platform-specific dependencies.
 
@@ -289,7 +289,7 @@ CHANNELFINDER/
 
 ## Version
 
-Current version: **v4.6.1**
+Current version: **v4.6.2**
 
 > Detailed change history is maintained in `GEMINI.md` and `CLAUDE.md` (AI session context files, not tracked in git).
 
