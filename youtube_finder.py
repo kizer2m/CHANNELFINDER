@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.6.1
+YouTube Channel Finder v4.6.2
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -227,7 +227,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.1{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.2{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -2469,12 +2469,12 @@ def main():
 
     while True:
         _ui_banner('Main Menu', 52, C.CN)
-        _ui_menu_item('1', 'Search videos', C.G, '🔍')
-        _ui_menu_item('2', 'Download single video by URL', C.CN, '⬇️')
-        _ui_menu_item('3', 'Parse channel (long | shorts)', C.H, '📊')
-        _ui_menu_item('4', 'Download from videolinks.txt', C.Y, '📥')
-        _ui_menu_item('5', 'Download thumbnails', C.B, '🖼️')
-        _ui_menu_item('6', 'Playlist Parser', C.H, '▶️  parse & download playlist')
+        _ui_menu_item('1', 'Search videos', C.G)
+        _ui_menu_item('2', 'Download single video by URL', C.CN)
+        _ui_menu_item('3', 'Parse channel (long | shorts)', C.H)
+        _ui_menu_item('4', 'Download from videolinks.txt', C.Y)
+        _ui_menu_item('5', 'Download thumbnails', C.B)
+        _ui_menu_item('6', 'Playlist Parser', C.H)
         _ui_separator()
         _ui_menu_back('0', 'Exit')
 
