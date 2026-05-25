@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.6.0
+YouTube Channel Finder v4.6.1
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -174,7 +174,7 @@ def _ui_separator(color: str = C.DG):
 def _ui_menu_item(key: str, label: str, accent: str = C.CN, extra: str = ''):
     """Print a styled menu item with consistent formatting."""
     dot = f"{C.DG}│{C.E}"
-    num = f"  {dot} {accent}{C.BO}{key}.{C.E}"
+    num = f"  {dot} {C.W}{C.BO}{key}.{C.E}"
     ex = f"  {C.DM}{extra}{C.E}" if extra else ''
     print(f"{num} {C.W}{label}{C.E}{ex}")
 
@@ -227,7 +227,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.1{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
