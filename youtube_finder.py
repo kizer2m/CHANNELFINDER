@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.6.2
+YouTube Channel Finder v4.6.3
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -227,7 +227,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.2{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.3{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -764,6 +764,15 @@ def _pick_quality() -> dict:
     return opts
 
 
+# Extractor args for yt-dlp to bypass YouTube BotGuard/PO-token blocks without cookies.
+# VisionOS and Safari clients do not require web BotGuard challenge attestation
+# and return full streams (including 1080p, 4K UHD).
+_YT_EXTRACTOR_ARGS = {
+    'youtube': {
+        'player_client': ['visionos', 'web_safari', 'web'],
+    }
+}
+
 
 def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
     """Return deduplicated descending list of heights >=2160 available for the URL."""
@@ -777,6 +786,7 @@ def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
         'logger': _YtLogger(),
         'js_runtimes': {'node': {}},
         'remote_components': ['ejs:github'],
+        'extractor_args': _YT_EXTRACTOR_ARGS,
     }
     for k, v in cookie_opts.items():
         if not k.startswith('_'):
@@ -916,6 +926,7 @@ def _validate_cookie_file(cfile: str) -> bool:
         'skip_download': True,
         'js_runtimes': {'node': {}},
         'remote_components': ['ejs:github'],
+        'extractor_args': _YT_EXTRACTOR_ARGS,
     }
     try:
         with YoutubeDL(opts) as ydl:
@@ -950,11 +961,11 @@ def _pick_cookie_source() -> dict:
     '_cookie_mode' = 'none' | 'browser' | 'file' for retry logic.
     """
     _ui_header('Cookies | Authentication', C.Y)
-    print(f"  {C.DM}YouTube may block downloads without authentication.{C.E}\n")
-    _ui_menu_item('1', 'No cookies', C.CN, 'try without auth')
+    print(f"  {C.DM}Built-in VisionOS/Safari spoofing bypasses bot detection without login.{C.E}\n")
+    _ui_menu_item('1', 'No cookies', C.G, 'VisionOS/Safari client bypass')
     _ui_menu_item('2', 'Use cookies from browser', C.CN)
     print(f"      {C.Y}⚠  Chrome 127+ blocks extraction (App-Bound Encryption){C.E}")
-    _ui_menu_item('3', 'Use cookies from a .txt file', C.G, '← most reliable')
+    _ui_menu_item('3', 'Use cookies from a .txt file', C.G, '← for private/age-gated videos')
     print(f"      {C.DM}Export via \'Get cookies.txt LOCALLY\' (Chrome) or \'cookies.txt\' (Firefox){C.E}")
     ch = _ui_prompt()
 
@@ -1355,6 +1366,8 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
         'js_runtimes':      {'node': {}},
         # Download EJS challenge solver from GitHub (required to decrypt YouTube stream URLs)
         'remote_components': ['ejs:github'],
+        # Spoof VisionOS & Safari clients to bypass YouTube BotGuard checks without cookies
+        'extractor_args':   _YT_EXTRACTOR_ARGS,
     }
     opts.update(quality_opts)
     # Apply cookie options (strip our internal meta keys)
@@ -1506,6 +1519,8 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                             try:
                                 _download_one(ydl, url, i, len(urls), out_dir,
                                               from_videolinks=from_videolinks)
+                                if i < len(urls):
+                                    time.sleep(1.0)
                             except Exception as e:
                                 err_msg = str(e)
                                 if _is_cookie_db_error(err_msg):
@@ -1535,6 +1550,8 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                 try:
                     _download_one(ydl, url, i, len(urls), out_dir,
                                   from_videolinks=from_videolinks)
+                    if i < len(urls):
+                        time.sleep(1.0)
                 except Exception as e:
                     err_msg = str(e)
 
@@ -1636,7 +1653,8 @@ def mode_download_single(km: KeyManager):
         with YoutubeDL({'quiet': True, 'no_warnings': True,
                         'logger': _YtLogger(), 'skip_download': True,
                         'js_runtimes': {'node': {}},
-                        'remote_components': ['ejs:github']}) as ydl:
+                        'remote_components': ['ejs:github'],
+                        'extractor_args': _YT_EXTRACTOR_ARGS}) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
         print(f"  {C.R}✗  Could not fetch info: {e}{C.E}")
@@ -1977,6 +1995,7 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
             'logger': _YtLogger(), 'skip_download': True,
             'js_runtimes': {'node': {}},
             'remote_components': ['ejs:github'],
+            'extractor_args': _YT_EXTRACTOR_ARGS,
         }
         try:
             with YoutubeDL(probe_opts) as ydl:
