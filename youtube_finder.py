@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.9.0
+YouTube Channel Finder v4.9.1
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -232,7 +232,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.9.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.9.1{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -621,11 +621,13 @@ def check_key_quotas(km: KeyManager):
 #  GENERIC API CALL WITH KEY ROTATION
 # ═══════════════════════════════════════════════════════════════════════
 
-def api_call(km: KeyManager, build_fn):
+def api_call(km: KeyManager, build_fn, quiet_404: bool = False):
     """
     build_fn(youtube_service) → request object.
     Automatically rotates keys on 403/429/400 errors.
     Returns parsed JSON response or None.
+    quiet_404 — return None silently on 404 (e.g. a channel's Shorts playlist
+    doesn't exist when the channel has no Shorts).
     """
     attempts = 0
     while attempts < len(km.keys):
@@ -638,6 +640,8 @@ def api_call(km: KeyManager, build_fn):
                 print(f"  {C.R}✗  Key ...{km.key()[-6:]} error {code}. Rotating...{C.E}")
                 km.rotate()
                 attempts += 1
+            elif code == 404 and quiet_404:
+                return None
             else:
                 print(f"  {C.R}✗  HTTP {code}: {e}{C.E}")
                 return None
@@ -2250,8 +2254,84 @@ def fetch_all_channel_videos(km: KeyManager, channel_id: str) -> list:
     return videos
 
 
+def _fetch_playlist_items(km: KeyManager, playlist_id: str, since: str = '') -> list:
+    """All items of a playlist, newest first: [{videoId, title, publishedAt}].
+
+    since — ISO date; only videos published after it are returned and paging
+    stops after the first page that reaches older ones (uploads-type
+    playlists are newest-first). A missing playlist (404) yields [].
+    """
+    videos, page_token = [], None
+    while True:
+        def req(yt, pt=page_token):
+            params = dict(part="snippet,contentDetails", playlistId=playlist_id, maxResults=50)
+            if pt:
+                params['pageToken'] = pt
+            return yt.playlistItems().list(**params)
+
+        resp = api_call(km, req, quiet_404=True)
+        if not resp:
+            break
+        reached_old = False
+        for it in resp.get('items', []):
+            sn = it.get('snippet', {})
+            vid = sn.get('resourceId', {}).get('videoId')
+            published = (it.get('contentDetails', {}).get('videoPublishedAt')
+                         or sn.get('publishedAt', ''))
+            if not vid or not published:
+                continue        # private / deleted / not yet premiered
+            if since and published <= since:
+                reached_old = True
+                continue
+            videos.append(dict(videoId=vid, title=sn.get('title', ''), publishedAt=published))
+        page_token = resp.get('nextPageToken')
+        if reached_old or not page_token:
+            break
+        if len(videos) % 500 == 0:
+            print(f"  {C.DM}... fetched {len(videos)} so far{C.E}")
+    return videos
+
+
+# Hidden per-channel playlists maintained by YouTube itself (same ID suffix as
+# the uploads playlist 'UU…'): long-form videos, Shorts, past live streams.
+# LF + SH + LV = UU (verified), and Shorts are classified by YouTube — duration
+# can't tell them apart (Shorts may be up to 3 min, regular videos can be shorter).
+_PL_LONG, _PL_SHORTS, _PL_LIVE = 'UULF', 'UUSH', 'UULV'
+
+
+def fetch_channel_split(km: KeyManager, channel_id: str, since: str = '',
+                        want: str = 'all') -> tuple:
+    """(longs, shorts) for a channel. Long videos include past live streams.
+    want — 'long' / 'shorts' / 'all': skip fetching what isn't needed.
+    Falls back to duration-based classification if the hidden playlists vanish."""
+    if not channel_id.startswith('UC'):
+        vids = fetch_all_channel_videos(km, channel_id)
+        return classify_videos(km, vids)
+    suffix = channel_id[2:]
+    longs = shorts = []
+    if want in ('long', 'all'):
+        longs = (_fetch_playlist_items(km, _PL_LONG + suffix, since)
+                 + _fetch_playlist_items(km, _PL_LIVE + suffix, since))
+        longs.sort(key=lambda v: v['publishedAt'], reverse=True)
+    if want in ('shorts', 'all'):
+        shorts = _fetch_playlist_items(km, _PL_SHORTS + suffix, since)
+    if not longs and not shorts:
+        # Either nothing new — or YouTube removed the hidden playlists.
+        uploads = _fetch_playlist_items(km, 'UU' + suffix, since)
+        if uploads:
+            print(f"  {C.Y}⚠  Shorts playlist unavailable — classifying by duration (≤60 s){C.E}")
+            l, s = classify_videos(km, uploads)
+            dates = {v['videoId']: v['publishedAt'] for v in uploads}
+            for v in l + s:
+                v['publishedAt'] = dates.get(v['videoId'], '')
+            longs = l if want in ('long', 'all') else []
+            shorts = s if want in ('shorts', 'all') else []
+    return longs, shorts
+
+
 def classify_videos(km: KeyManager, videos: list):
-    """Get durations via videos().list and split into longs (>60s) & shorts (≤60s)."""
+    """Fallback only: split by duration into longs (>60s) & shorts (≤60s).
+    Prefer fetch_channel_split() — YouTube's own Shorts playlist is exact."""
     longs, shorts = [], []
 
     for i in range(0, len(videos), 50):
@@ -2445,20 +2525,16 @@ def mode_parse(km: KeyManager, channel: tuple = None):
     _ui_separator()
     print(f"  {C.CN}⟳  Fetching all videos (may take a while)...{C.E}")
 
-    all_vids = fetch_all_channel_videos(km, cid)
-    if not all_vids:
+    # Long/Shorts split comes from YouTube's own per-channel playlists
+    longs, shorts = fetch_channel_split(km, cid)
+    if not longs and not shorts:
         print(f"  {C.Y}⚠  No videos found.{C.E}")
         return
 
-    print(f"  {C.G}✓  Fetched {len(all_vids)} video(s){C.E}")
-    print(f"  {C.CN}⟳  Classifying long vs. shorts...{C.E}")
-
-    longs, shorts = classify_videos(km, all_vids)
-
     _ui_separator()
     print(f"  {C.DG}│{C.E} {C.W}{C.BO}{ctitle}{C.E}")
-    print(f"  {C.DG}│{C.E} {C.G}Long videos (>60 s): {C.W}{C.BO}{len(longs)}{C.E}")
-    print(f"  {C.DG}│{C.E} {C.Y}Shorts     (≤60 s): {C.W}{C.BO}{len(shorts)}{C.E}")
+    print(f"  {C.DG}│{C.E} {C.G}Long videos: {C.W}{C.BO}{len(longs)}{C.E}  {C.DM}(incl. past live streams){C.E}")
+    print(f"  {C.DG}│{C.E} {C.Y}Shorts     : {C.W}{C.BO}{len(shorts)}{C.E}")
     _ui_separator()
 
     # ── Save to parsed/ ─────────────────────────────────────────────────
@@ -2527,8 +2603,8 @@ def mode_parse(km: KeyManager, channel: tuple = None):
 # ═══════════════════════════════════════════════════════════════════════
 # channels.json: [{id, title, type: long|shorts|all, since: ISO-8601 UTC, checked}]
 # 'since' = publish time of the newest video already handled; only videos
-# published after it are new. Uploads playlists are newest-first, so paging
-# stops early — a check costs ~2 quota units per channel.
+# published after it are new. Playlists are newest-first, so paging stops
+# early — a check costs ~2–4 quota units per channel.
 
 _SYNC_TYPES = {'long': 'Long videos', 'shorts': 'Shorts', 'all': 'Long + Shorts'}
 
@@ -2554,41 +2630,6 @@ def _save_channels(channels: list):
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(channels, f, ensure_ascii=False, indent=2)
     os.replace(tmp, CHANNELS_FILE)
-
-
-def _fetch_uploads_since(km: KeyManager, channel_id: str, since: str) -> list:
-    """Uploads published after `since` ('' = all), newest first.
-    Stops paging after the first page that reaches older videos."""
-    playlist = 'UU' + channel_id[2:] if channel_id.startswith('UC') else None
-    if not playlist:
-        return []
-    videos, page_token = [], None
-    while True:
-        def req(yt, pt=page_token):
-            params = dict(part="snippet,contentDetails", playlistId=playlist, maxResults=50)
-            if pt:
-                params['pageToken'] = pt
-            return yt.playlistItems().list(**params)
-
-        resp = api_call(km, req)
-        if not resp:
-            break
-        reached_old = False
-        for it in resp.get('items', []):
-            sn = it.get('snippet', {})
-            vid = sn.get('resourceId', {}).get('videoId')
-            published = (it.get('contentDetails', {}).get('videoPublishedAt')
-                         or sn.get('publishedAt', ''))
-            if not vid or not published:
-                continue        # private / deleted / not yet premiered
-            if since and published <= since:
-                reached_old = True
-                continue
-            videos.append(dict(videoId=vid, title=sn.get('title', ''), publishedAt=published))
-        page_token = resp.get('nextPageToken')
-        if reached_old or not page_token:
-            break
-    return videos
 
 
 def _sync_add(km: KeyManager, cid: str = None, title: str = None):
@@ -2637,11 +2678,10 @@ def _sync_check(km: KeyManager, channels: list):
     new_urls, titles = [], {}
     _ui_header('Checking channels for new videos', C.H)
     for c in channels:
-        vids = _fetch_uploads_since(km, c['id'], c.get('since', ''))
+        want = c.get('type', 'long')
+        longs, shorts = fetch_channel_split(km, c['id'], c.get('since', ''), want)
+        vids = longs + shorts
         newest = max((v['publishedAt'] for v in vids), default='')
-        if vids and c.get('type', 'long') != 'all':
-            longs, shorts = classify_videos(km, vids)
-            vids = longs if c.get('type', 'long') == 'long' else shorts
         color = C.G if vids else C.DM
         print(f"  {C.DG}│{C.E} {C.W}{c['title'][:40]:<40}{C.E}  {color}{len(vids):>4} new{C.E}")
         for v in vids:

@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.9.0
+# YouTube Channel Finder v4.9.1
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -112,6 +112,7 @@ Accepts a channel URL, an `@handle` (any language, e.g. `@ОльгаКиселё
 
 - Lists **all** videos, even on channels with thousands of uploads, at about 1 quota unit per 50 videos
 - Saves the links to `parsed/<Channel>_long.txt` and `parsed/<Channel>_shorts.txt`
+- Long videos and Shorts are separated by YouTube itself (Shorts can be up to 3 minutes, so length alone can't tell them apart); past live streams count as long videos
 - Then lets you download long videos, Shorts or both, optionally together with thumbnails
 
 Links are copied into `videolinks.txt` before downloading. If the download is interrupted, finish it later with **mode 4**.
@@ -307,7 +308,7 @@ Everything below `requirements.txt` is created by the tool and excluded from git
 
 ## Version
 
-Current version: **v4.9.0**
+Current version: **v4.9.1**
 
 ---
 
