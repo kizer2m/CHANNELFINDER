@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.7.1
+# YouTube Channel Finder v4.8.0
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -32,10 +32,13 @@ Search and parsing use the official **YouTube Data API v3**; downloads use **yt-
 | **4 · Batch download** | Downloads all URLs from `videolinks.txt`; finished links are removed, so an interrupted batch resumes where it stopped |
 | **5 · Thumbnails** | Max-resolution thumbnails for one video or a whole channel |
 | **6 · Playlist parser** | Lists every video of a playlist; bulk download of videos or thumbnails |
+| **7 · Sync channels** | Follows your favourite channels and downloads only the videos you don't have yet |
 
 Also:
 
 - **Quality choice**: 1080p, 720p, 480p, MP3 audio, or 4K/8K when the video has it
+- **Never downloads the same video twice** — every download is remembered
+- **Ctrl+C stops safely** — the batch summary is shown and the rest can be resumed later
 - **Metadata** saved next to each video (title, channel, views, likes, tags, description)
 - **Several API keys** with automatic switching when one runs out of quota
 - **Anti-bot protection**: PO tokens, human-like pauses, fresh login cookies on demand ([details](#avoiding-sign-in-to-confirm-youre-not-a-bot))
@@ -111,6 +114,8 @@ Accepts a channel URL, an `@handle` (any language, e.g. `@ОльгаКиселё
 
 Links are copied into `videolinks.txt` before downloading. If the download is interrupted, finish it later with **mode 4**.
 
+Choose **Add channel to sync list** to keep getting the channel's new videos via **mode 7**.
+
 ### 4 · Batch download
 
 Put video URLs into `videolinks.txt`, one per line (lines starting with `#` are ignored), and choose mode 4. Each downloaded link is removed from the file right away.
@@ -122,6 +127,15 @@ Downloads the highest-resolution thumbnail (falls back to HQ when no max-res ver
 ### 6 · Playlist parser
 
 Accepts a playlist URL (`...?list=PL...`) or a bare playlist ID. Skips deleted and private videos, saves the list to `parsed/<Playlist>_playlist.txt`, and offers to download the videos or thumbnails.
+
+### 7 · Sync channels
+
+Keep a list of channels and download only what is new since the last check.
+
+1. Add a channel here or from **mode 3** (*Add channel to sync list*). Choose what to follow — long videos, Shorts or both — and where to start: only videos published from now on, the last 30 days, or the whole channel.
+2. Whenever you like, choose **Check & download new videos**. New videos of all channels are found, queued in `videolinks.txt` and downloaded.
+
+A check costs about 1 API quota unit per channel. The list is stored in `channels.json`.
 
 ### Download options
 
@@ -144,6 +158,10 @@ Every download asks two questions.
 | 3 · Cookies from a .txt file | if you already have a `cookies.txt` exported some other way |
 
 Videos are saved to `downloads/` as `Title [videoId].mp4` together with a `.txt` file of metadata.
+
+**Already downloaded?** Every finished video is recorded in `downloads/downloaded_videos.txt` (MP3s in `downloaded_audio.txt`); files already in `downloads/` count too. If a list contains videos you already have, you are asked whether to skip them — no request is sent to YouTube for skipped videos. Having the MP4 doesn't block downloading the MP3 and vice versa.
+
+**Stopping:** press **Ctrl+C** at any time. The current batch stops, you see how many videos were finished, and the rest stays in `videolinks.txt` for **mode 4**. A half-downloaded file continues where it stopped. Ctrl+C in the main menu exits the program.
 
 ---
 
@@ -229,9 +247,10 @@ CHANNELFINDER/
 ├── pot-provider/          token server (built automatically)
 │
 ├── videolinks.txt         links waiting for download (mode 4)
+├── channels.json          channels followed by mode 7
 ├── find.txt               links saved from searches
 ├── parsed/                channel and playlist link lists
-├── downloads/             videos + metadata
+├── downloads/             videos + metadata + list of downloaded videos
 └── thumbnails/            thumbnails
 ```
 
@@ -255,7 +274,7 @@ Everything below `requirements.txt` is created by the tool and excluded from git
 
 ## Version
 
-Current version: **v4.7.1**
+Current version: **v4.8.0**
 
 ---
 

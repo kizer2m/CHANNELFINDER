@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.7.1
+YouTube Channel Finder v4.8.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -65,6 +65,7 @@ DOWNLOADS_DIR = os.path.join(SCRIPT_DIR, 'downloads')
 PARSED_DIR    = os.path.join(SCRIPT_DIR, 'parsed')
 VIDEOLINKS    = os.path.join(SCRIPT_DIR, 'videolinks.txt')
 COOKIES_FILE  = os.path.join(SCRIPT_DIR, 'cookies.txt')
+CHANNELS_FILE = os.path.join(SCRIPT_DIR, 'channels.json')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -231,7 +232,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.7.1{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.8.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -884,6 +885,7 @@ def _pick_quality() -> dict:
                           '/bestvideo*[height<=480]+bestaudio'
                           '/best[height<=480]/best/worst')
     elif q == '4':
+        opts['_audio'] = True     # separate download archive for MP3
         opts['format'] = 'bestaudio/best'
         opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
@@ -1305,6 +1307,12 @@ def _pp_animate(cfg: dict, bar_width: int, stop_event: threading.Event):
         stop_event.wait(0.1)  # ~10 FPS, exits immediately if stop_event is set
 
 
+def _pp_stop_anim():
+    """Stop a running post-processing animation (e.g. after Ctrl+C)."""
+    if _pp_anim['stop_event'] is not None:
+        _pp_anim['stop_event'].set()
+
+
 def _format_eta(seconds) -> str:
     """Format ETA seconds into mm:ss or hh:mm:ss string."""
     if seconds is None or seconds < 0:
@@ -1525,13 +1533,101 @@ def _print_bot_block_help(remaining: int, from_videolinks: bool):
         print(f"  {C.DM}   {remaining} URL(s) not downloaded remain in videolinks.txt — resume via Mode 4.{C.E}")
 
 
+def _print_interrupted(done: int, total: int, from_videolinks: bool):
+    """Summary after the user pressed Ctrl+C during a batch."""
+    _pp_stop_anim()
+    print(f"\n\n  {C.Y}{C.BO}⏹  Stopped by user{C.E} {C.Y}— {done} of {total} downloaded.{C.E}")
+    if from_videolinks and done < total:
+        print(f"  {C.DM}   The rest stays in videolinks.txt — resume via Mode 4 "
+              f"(an unfinished file continues where it stopped).{C.E}")
+    else:
+        print(f"  {C.DM}   Finished videos are remembered and skipped next time.{C.E}")
+
+
+# ── Download archive ────────────────────────────────────────────────────
+# Remembers every downloaded video (yt-dlp archive format: "youtube <id>"),
+# so a video is never fetched twice — the check costs no YouTube request.
+# Video and MP3 are tracked separately: having the MP4 still allows the MP3.
+_VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([\w-]{11})')
+_VIDEO_EXTS  = ('.mp4', '.mkv', '.webm', '.mov')
+_AUDIO_EXTS  = ('.mp3', '.m4a', '.opus', '.ogg', '.wav')
+
+
+def _video_id(url: str) -> str | None:
+    m = _VIDEO_ID_RE.search(url or '')
+    return m.group(1) if m else None
+
+
+def _archive_path(out_dir: str, audio: bool) -> str:
+    return os.path.join(out_dir, 'downloaded_audio.txt' if audio else 'downloaded_videos.txt')
+
+
+def _archive_ids(out_dir: str, audio: bool) -> set:
+    """IDs from the archive file + files already in out_dir ("Title [id].ext"),
+    so downloads made before the archive existed are recognised too."""
+    ids = set()
+    try:
+        with open(_archive_path(out_dir, audio), encoding='utf-8') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2:
+                    ids.add(parts[1])
+    except FileNotFoundError:
+        pass
+    exts = _AUDIO_EXTS if audio else _VIDEO_EXTS
+    try:
+        for name in os.listdir(out_dir):
+            m = re.search(r'\[([\w-]{11})\](\.\w+)$', name)
+            if m and m.group(2).lower() in exts:
+                ids.add(m.group(1))
+    except FileNotFoundError:
+        pass
+    return ids
+
+
+def _archive_add(archive: str, vid: str):
+    if not vid:
+        return
+    try:
+        with open(archive, 'a', encoding='utf-8') as f:
+            f.write(f"youtube {vid}\n")
+    except OSError as e:
+        print(f"  {C.Y}⚠  Could not update download archive: {e}{C.E}")
+
+
+def _skip_downloaded(urls: list, out_dir: str, audio: bool, from_videolinks: bool) -> list:
+    """Ask whether to skip videos downloaded before; returns the URLs to download."""
+    done_ids = _archive_ids(out_dir, audio)
+    have = [u for u in urls if _video_id(u) in done_ids]
+    if not have:
+        return urls
+    kind = 'MP3' if audio else 'video'
+    _ui_header('Already downloaded', C.Y)
+    print(f"  {C.DG}│{C.E} {C.W}{C.BO}{len(have)}{C.E} of {len(urls)} {kind}(s) were downloaded before\n")
+    _ui_menu_item('1', 'Skip them', C.G, 'recommended')
+    _ui_menu_item('2', 'Download again', C.Y)
+    if _ui_prompt() == '2':
+        return urls
+    if from_videolinks:
+        for u in have:
+            _remove_url_from_videolinks(u)
+    rest = [u for u in urls if _video_id(u) not in done_ids]
+    if rest:
+        print(f"  {C.G}✓{C.E}  {C.DM}Skipped {len(have)}, {len(rest)} left to download{C.E}")
+    else:
+        print(f"  {C.G}✓  Nothing new to download.{C.E}")
+    return rest
+
+
 def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
-                  from_videolinks: bool = False, raw: dict = None) -> bool:
+                  from_videolinks: bool = False, raw: dict = None,
+                  archive: str = None) -> bool:
     """Download a single URL. Returns True on success, False on failure.
 
     When from_videolinks=True the URL will be removed from videolinks.txt
     after a successful download.
     raw — already-extracted (process=False) info dict to reuse; skips extraction.
+    archive — download-archive file to record the video in after success.
     """
     # Extract ONCE per video (process=False = no format selection yet, avoids
     # format-not-available errors), then reuse this dict for download + metadata.
@@ -1552,6 +1648,8 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     # Full pipeline on the already-extracted info: format selection + download + post-process
     info = ydl.process_ie_result(raw, download=True)
     _save_video_metadata(info or raw, out_dir)
+    if archive:
+        _archive_add(archive, (info or raw).get('id'))
     # Remove from videolinks.txt if this batch came from there
     if from_videolinks:
         _remove_url_from_videolinks(url)
@@ -1565,6 +1663,8 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
     When from_videolinks=True each successfully downloaded URL is removed from
     videolinks.txt immediately after download.
+    Videos already in the download archive are skipped (after asking).
+    Ctrl+C stops the batch cleanly and returns to the menu.
     """
     try:
         from yt_dlp import YoutubeDL
@@ -1574,109 +1674,134 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
     os.makedirs(out_dir, exist_ok=True)
 
+    # Same video listed twice → download it once
+    seen, unique = set(), []
+    for u in urls:
+        key = _video_id(u) or u
+        if key not in seen:
+            seen.add(key)
+            unique.append(u)
+    urls = unique
+
     quality_opts  = _pick_quality()
+    audio         = quality_opts.pop('_audio', False)
+    archive       = _archive_path(out_dir, audio)
+    # Before the cookie menu: option 2 may open a browser — pointless if nothing is new
+    urls = _skip_downloaded(urls, out_dir, audio, from_videolinks)
+    if not urls:
+        return
     cookie_opts   = _pick_cookie_source()
     cookie_mode   = cookie_opts.get('_cookie_mode', 'none')
 
-    # ── Ultra High (4K/8K) mode — probe + resolve format per URL ────────
-    if quality_opts.pop('_quality_mode', None) == 'ultra_high':
-        uhd_pp = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
-        for i, url in enumerate(urls, 1):
-            if i > 1:
-                _polite_pause(i - 1)
-            # Resolve UHD format for this URL
-            while True:
-                print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
-                try:
-                    available, probed = _probe_uhd_formats(url, cookie_opts)
-                except Exception as e:
-                    print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
-                    _print_bot_block_help(len(urls) - i + 1, from_videolinks)
-                    return
-                if not available:
-                    print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
-                    _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
-                    _ui_menu_item('2', 'Back to main menu', C.DG)
-                    ch = _ui_prompt()
-                    if ch == '2':
-                        return
-                    break  # skip this URL
-                fmt = _pick_uhd_resolution(available)
-                if fmt == '':  # user chose 'back' in the resolution picker
-                    continue  # re-prompt probing (same URL)
-                # Build per-URL opts
-                url_quality = {
-                    'format': fmt,
-                    'merge_output_format': 'mp4',
-                    'postprocessors': uhd_pp,
-                }
-                url_opts = _build_ydl_opts(out_dir, url_quality, cookie_opts)
-                try:
-                    with YoutubeDL(url_opts) as ydl:
-                        _download_one(ydl, url, i, len(urls), out_dir,
-                                      from_videolinks=from_videolinks, raw=probed)
-                except Exception as e:
-                    err_msg = str(e)
-                    print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
-                    if _is_bot_error(err_msg):
-                        _print_bot_block_help(len(urls) - i + 1, from_videolinks)
-                        return
-                break  # move to next URL
-        print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
-        return
-
-    base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
-
-    print(f"\n  {C.G}{C.BO}⬢{C.E}  {C.W}{C.BO}Starting download of {len(urls)} video(s)...{C.E}")
-    print(f"  {C.DM}{'─' * 46}{C.E}\n")
-
-    failed_urls = []
-
-    with YoutubeDL(base_opts) as ydl:
-        for i, url in enumerate(urls, 1):
-            try:
-                _download_one(ydl, url, i, len(urls), out_dir,
-                              from_videolinks=from_videolinks)
-            except Exception as e:
-                err_msg = str(e)
-                print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
-
-                # Bot block: stop right away — every further request deepens the flag
-                if _is_bot_error(err_msg):
-                    if cookie_mode == 'none':
-                        print(f"  {C.Y}↳ Bot/auth block detected — will retry the rest with fresh cookies.{C.E}")
-                        failed_urls = urls[i - 1:]
-                    else:
-                        _print_bot_block_help(len(urls) - i + 1, from_videolinks)
-                    break
-                print()
-            if i < len(urls):
-                _polite_pause(i)
-
-    # ── Auto-retry with fresh cookies from the tool browser profile ────
-    if failed_urls:
-        _ui_header(f'Retrying {len(failed_urls)} blocked video(s) with fresh cookies', C.Y)
-        retry_cookie_opts = _fresh_cookie_opts()
-        if not retry_cookie_opts:
-            _print_bot_block_help(len(failed_urls), from_videolinks)
-        else:
-            retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
-            with YoutubeDL(retry_opts) as ydl_retry:
-                for i, url in enumerate(failed_urls, 1):
+    total, done = len(urls), 0
+    try:
+        # ── Ultra High (4K/8K) mode — probe + resolve format per URL ────
+        if quality_opts.pop('_quality_mode', None) == 'ultra_high':
+            uhd_pp = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
+            for i, url in enumerate(urls, 1):
+                if i > 1:
+                    _polite_pause(i - 1)
+                # Resolve UHD format for this URL
+                while True:
+                    print(f"\n{C.CN}[{i}/{total}] Probing Ultra HD formats...{C.E}")
                     try:
-                        _download_one(ydl_retry, url, i, len(failed_urls), out_dir,
-                                      from_videolinks=from_videolinks)
+                        available, probed = _probe_uhd_formats(url, cookie_opts)
+                    except Exception as e:
+                        print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
+                        _print_bot_block_help(total - i + 1, from_videolinks)
+                        return
+                    if not available:
+                        print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
+                        _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
+                        _ui_menu_item('2', 'Back to main menu', C.DG)
+                        ch = _ui_prompt()
+                        if ch == '2':
+                            return
+                        break  # skip this URL
+                    fmt = _pick_uhd_resolution(available)
+                    if fmt == '':  # user chose 'back' in the resolution picker
+                        continue  # re-prompt probing (same URL)
+                    # Build per-URL opts
+                    url_quality = {
+                        'format': fmt,
+                        'merge_output_format': 'mp4',
+                        'postprocessors': uhd_pp,
+                    }
+                    url_opts = _build_ydl_opts(out_dir, url_quality, cookie_opts)
+                    try:
+                        with YoutubeDL(url_opts) as ydl:
+                            if _download_one(ydl, url, i, total, out_dir,
+                                             from_videolinks=from_videolinks,
+                                             raw=probed, archive=archive):
+                                done += 1
                     except Exception as e:
                         err_msg = str(e)
-                        print(f"\n  {C.R}✗  Retry failed: {err_msg[:200]}{C.E}\n")
+                        print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
                         if _is_bot_error(err_msg):
-                            _print_bot_block_help(len(failed_urls) - i + 1, from_videolinks)
-                            break
-                    if i < len(failed_urls):
-                        _polite_pause(i)
+                            _print_bot_block_help(total - i + 1, from_videolinks)
+                            return
+                    break  # move to next URL
+            print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
+            return
+
+        base_opts = _build_ydl_opts(out_dir, quality_opts, cookie_opts)
+
+        print(f"\n  {C.G}{C.BO}⬢{C.E}  {C.W}{C.BO}Starting download of {total} video(s)...{C.E}"
+              f"  {C.DM}(Ctrl+C = stop){C.E}")
+        print(f"  {C.DM}{'─' * 46}{C.E}\n")
+
+        failed_urls = []
+
+        with YoutubeDL(base_opts) as ydl:
+            for i, url in enumerate(urls, 1):
+                try:
+                    if _download_one(ydl, url, i, total, out_dir,
+                                     from_videolinks=from_videolinks, archive=archive):
+                        done += 1
+                except Exception as e:
+                    err_msg = str(e)
+                    print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
+
+                    # Bot block: stop right away — every further request deepens the flag
+                    if _is_bot_error(err_msg):
+                        if cookie_mode == 'none':
+                            print(f"  {C.Y}↳ Bot/auth block detected — will retry the rest with fresh cookies.{C.E}")
+                            failed_urls = urls[i - 1:]
+                        else:
+                            _print_bot_block_help(total - i + 1, from_videolinks)
+                        break
+                    print()
+                if i < total:
+                    _polite_pause(i)
+
+        # ── Auto-retry with fresh cookies from the tool browser profile ─
+        if failed_urls:
+            _ui_header(f'Retrying {len(failed_urls)} blocked video(s) with fresh cookies', C.Y)
+            retry_cookie_opts = _fresh_cookie_opts()
+            if not retry_cookie_opts:
+                _print_bot_block_help(len(failed_urls), from_videolinks)
+            else:
+                retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
+                with YoutubeDL(retry_opts) as ydl_retry:
+                    for i, url in enumerate(failed_urls, 1):
+                        try:
+                            if _download_one(ydl_retry, url, i, len(failed_urls), out_dir,
+                                             from_videolinks=from_videolinks, archive=archive):
+                                done += 1
+                        except Exception as e:
+                            err_msg = str(e)
+                            print(f"\n  {C.R}✗  Retry failed: {err_msg[:200]}{C.E}\n")
+                            if _is_bot_error(err_msg):
+                                _print_bot_block_help(len(failed_urls) - i + 1, from_videolinks)
+                                break
+                        if i < len(failed_urls):
+                            _polite_pause(i)
+    except KeyboardInterrupt:
+        _print_interrupted(done, total, from_videolinks)
+        return
 
     print(f"\n  {C.DM}{'─' * 46}{C.E}")
-    print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
+    print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done — {done} of {total} downloaded → {out_dir}{C.E}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2218,11 +2343,14 @@ def mode_parse(km: KeyManager):
         _ui_menu_item('1', f'Download long videos', C.G, f'{len(longs)} videos')
         _ui_menu_item('2', f'Download shorts', C.Y, f'{len(shorts)} videos')
         _ui_menu_item('3', f'Download long + shorts', C.CN, f'{len(longs) + len(shorts)} videos')
+        _ui_menu_item('4', 'Add channel to sync list', C.H, 'download new videos later via Mode 7')
         _ui_menu_back('0', 'Back to main menu')
         ch = _ui_prompt()
 
         if ch == '0':
             return
+        elif ch == '4':
+            _sync_add(km, cid, ctitle)
         elif ch == '1':
             if not long_urls:
                 print(f"  {C.Y}⚠  No long videos found on this channel.{C.E}")
@@ -2241,6 +2369,194 @@ def mode_parse(km: KeyManager):
             _parse_download_submenu(all_urls, 'Long + Shorts', f"{safe_name}_all", title_map)
         else:
             print(f"  {C.Y}Invalid choice.{C.E}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  MODE 7 — CHANNEL SYNC (download only new videos)
+# ═══════════════════════════════════════════════════════════════════════
+# channels.json: [{id, title, type: long|shorts|all, since: ISO-8601 UTC, checked}]
+# 'since' = publish time of the newest video already handled; only videos
+# published after it are new. Uploads playlists are newest-first, so paging
+# stops early — a check costs ~2 quota units per channel.
+
+_SYNC_TYPES = {'long': 'Long videos', 'shorts': 'Shorts', 'all': 'Long + Shorts'}
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _load_channels() -> list:
+    try:
+        with open(CHANNELS_FILE, encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        print(f"  {C.R}✗  Cannot read {CHANNELS_FILE}: {e}{C.E}")
+        return []
+
+
+def _save_channels(channels: list):
+    tmp = CHANNELS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(channels, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CHANNELS_FILE)
+
+
+def _fetch_uploads_since(km: KeyManager, channel_id: str, since: str) -> list:
+    """Uploads published after `since` ('' = all), newest first.
+    Stops paging after the first page that reaches older videos."""
+    playlist = 'UU' + channel_id[2:] if channel_id.startswith('UC') else None
+    if not playlist:
+        return []
+    videos, page_token = [], None
+    while True:
+        def req(yt, pt=page_token):
+            params = dict(part="snippet,contentDetails", playlistId=playlist, maxResults=50)
+            if pt:
+                params['pageToken'] = pt
+            return yt.playlistItems().list(**params)
+
+        resp = api_call(km, req)
+        if not resp:
+            break
+        reached_old = False
+        for it in resp.get('items', []):
+            sn = it.get('snippet', {})
+            vid = sn.get('resourceId', {}).get('videoId')
+            published = (it.get('contentDetails', {}).get('videoPublishedAt')
+                         or sn.get('publishedAt', ''))
+            if not vid or not published:
+                continue        # private / deleted / not yet premiered
+            if since and published <= since:
+                reached_old = True
+                continue
+            videos.append(dict(videoId=vid, title=sn.get('title', ''), publishedAt=published))
+        page_token = resp.get('nextPageToken')
+        if reached_old or not page_token:
+            break
+    return videos
+
+
+def _sync_add(km: KeyManager, cid: str = None, title: str = None):
+    """Add a channel to channels.json (asks what to download and from when)."""
+    if not cid:
+        print(f"  {C.DM}Paste a channel URL or @handle{C.E}")
+        user_in = _ui_prompt()
+        if not user_in:
+            return
+        cid, title = resolve_channel_id(km, user_in)
+        if not cid:
+            print(f"  {C.R}✗  Channel not found.{C.E}")
+            return
+    channels = _load_channels()
+    if any(c['id'] == cid for c in channels):
+        print(f"  {C.Y}⚠  {title} is already in the sync list.{C.E}")
+        return
+
+    _ui_header(f'Sync: {title}', C.H)
+    print(f"  {C.B}{C.BO}What to download:{C.E}")
+    _ui_menu_item('1', 'Long videos', C.G, 'default')
+    _ui_menu_item('2', 'Shorts', C.Y)
+    _ui_menu_item('3', 'Long + Shorts', C.CN)
+    vtype = {'2': 'shorts', '3': 'all'}.get(_ui_prompt(), 'long')
+
+    print(f"\n  {C.B}{C.BO}Start from:{C.E}")
+    _ui_menu_item('1', 'Only videos published from now on', C.G, 'default')
+    _ui_menu_item('2', 'Last 30 days + new ones', C.CN)
+    _ui_menu_item('3', 'Whole channel + new ones', C.Y, 'can be a lot of videos')
+    start = _ui_prompt()
+    if start == '2':
+        since = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    elif start == '3':
+        since = ''
+    else:
+        since = _utc_now_iso()
+
+    channels.append(dict(id=cid, title=title, type=vtype, since=since, checked=''))
+    _save_channels(channels)
+    print(f"  {C.G}✓  Added {C.W}{title}{C.E} {C.G}({_SYNC_TYPES[vtype]}) — "
+          f"run Mode 7 → 1 to download new videos{C.E}")
+
+
+def _sync_check(km: KeyManager, channels: list):
+    """Find new videos on all channels, queue them in videolinks.txt, offer download."""
+    new_urls, titles = [], {}
+    _ui_header('Checking channels for new videos', C.H)
+    for c in channels:
+        vids = _fetch_uploads_since(km, c['id'], c.get('since', ''))
+        newest = max((v['publishedAt'] for v in vids), default='')
+        if vids and c.get('type', 'long') != 'all':
+            longs, shorts = classify_videos(km, vids)
+            vids = longs if c.get('type', 'long') == 'long' else shorts
+        color = C.G if vids else C.DM
+        print(f"  {C.DG}│{C.E} {C.W}{c['title'][:40]:<40}{C.E}  {color}{len(vids):>4} new{C.E}")
+        for v in vids:
+            url = f"https://www.youtube.com/watch?v={v['videoId']}"
+            new_urls.append(url)
+            titles[v['videoId']] = v['title']
+        if newest:
+            c['since'] = newest
+        c['checked'] = _utc_now_iso()
+
+    # Queue first, then remember progress — an interrupted download is never lost
+    if new_urls:
+        _copy_urls_to_videolinks(new_urls)
+    _save_channels(channels)
+
+    if not new_urls:
+        print(f"\n  {C.G}✓  No new videos.{C.E}")
+        return
+    print(f"\n  {C.G}{C.BO}{len(new_urls)}{C.E} {C.G}new video(s) queued in videolinks.txt{C.E}")
+    ans = input(f"  Download now? {C.DM}[Y/n]{C.E} ").strip().lower()
+    if ans in ('', 'y', 'yes', 'д', 'да'):
+        _download_urls(new_urls, DOWNLOADS_DIR, from_videolinks=True)
+    else:
+        print(f"  {C.DM}Download them later via Mode 4.{C.E}")
+
+
+def mode_sync(km: KeyManager):
+    """Mode 7 — keep channels in sync: download only videos you don't have yet."""
+    while True:
+        channels = _load_channels()
+        _ui_header(f'Channel Sync ({len(channels)} channel(s))', C.H)
+        if channels:
+            for n, c in enumerate(channels, 1):
+                checked = (c.get('checked') or 'never')[:10]
+                print(f"  {C.DG}│{C.E} {C.DM}{n:>2}.{C.E} {C.W}{c['title'][:36]:<36}{C.E} "
+                      f"{C.DM}{_SYNC_TYPES.get(c.get('type'), '?'):<14} checked: {checked}{C.E}")
+            print()
+        else:
+            print(f"  {C.DM}No channels yet — add one below or from Mode 3.{C.E}\n")
+        _ui_menu_item('1', 'Check & download new videos', C.G, 'all channels')
+        _ui_menu_item('2', 'Add channel', C.CN)
+        _ui_menu_item('3', 'Remove channel', C.Y)
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
+
+        if ch == '0':
+            return
+        elif ch == '1':
+            if channels:
+                _sync_check(km, channels)
+            else:
+                print(f"  {C.Y}⚠  Add a channel first.{C.E}")
+        elif ch == '2':
+            _sync_add(km)
+        elif ch == '3' and channels:
+            print(f"  {C.DM}Number of the channel to remove:{C.E}")
+            try:
+                idx = int(_ui_prompt()) - 1
+                if not 0 <= idx < len(channels):
+                    raise ValueError
+            except ValueError:
+                print(f"  {C.Y}⚠  Invalid number.{C.E}")
+                continue
+            removed = channels.pop(idx)
+            _save_channels(channels)
+            print(f"  {C.G}✓  Removed {removed['title']}{C.E}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2579,30 +2895,41 @@ def main():
         _ui_menu_item('4', 'Download from videolinks.txt', C.Y)
         _ui_menu_item('5', 'Download thumbnails', C.B)
         _ui_menu_item('6', 'Playlist Parser', C.H)
+        _ui_menu_item('7', 'Sync channels', C.G)
         _ui_separator()
         _ui_menu_back('0', 'Exit')
 
-        choice = _ui_prompt()
+        try:
+            choice = _ui_prompt()
+        except (KeyboardInterrupt, EOFError):
+            break       # Ctrl+C in the main menu = exit
 
-        if choice == '1':
-            mode_search(km)
-        elif choice == '2':
-            mode_download_single(km)
-        elif choice == '3':
-            mode_parse(km)
-        elif choice == '4':
-            mode_download()
-        elif choice == '5':
-            mode_thumbnails(km)
-        elif choice == '6':
-            mode_playlist(km)
-        elif choice == '0':
+        modes = {
+            '1': lambda: mode_search(km),
+            '2': lambda: mode_download_single(km),
+            '3': lambda: mode_parse(km),
+            '4': mode_download,
+            '5': lambda: mode_thumbnails(km),
+            '6': lambda: mode_playlist(km),
+            '7': lambda: mode_sync(km),
+        }
+        if choice == '0':
             break
+        elif choice in modes:
+            try:
+                modes[choice]()
+            except (KeyboardInterrupt, EOFError):
+                # Ctrl+C anywhere inside a mode = back to the main menu
+                _pp_stop_anim()
+                print(f"\n\n  {C.Y}⏹  Cancelled — back to main menu{C.E}")
         else:
             print(f"  {C.Y}⚠  Invalid choice, try again.{C.E}")
 
     print(f"\n  {C.G}{C.BO}Goodbye! 👋{C.E}")
-    input("  Press Enter to close...")
+    try:
+        input("  Press Enter to close...")
+    except (KeyboardInterrupt, EOFError):
+        pass
 
 
 if __name__ == "__main__":

@@ -4,8 +4,10 @@ api_keys.txt
 # Search results
 find.txt
 
-# Video links
+# Video links + followed channels (mode 7)
 videolinks.txt
+channels.json
+channels.json.tmp
 
 # Browser cookies export + dedicated browser profile (login session!)
 cookies.txt
