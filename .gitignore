@@ -7,8 +7,13 @@ find.txt
 # Video links
 videolinks.txt
 
-# Browser cookies export
+# Browser cookies export + dedicated browser profile (login session!)
 cookies.txt
+cookies.txt.tmp
+browser_profile/
+
+# PO Token provider server (built locally)
+pot-provider/
 
 # Folders
 downloads/

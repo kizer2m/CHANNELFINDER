@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.6.4
+YouTube Channel Finder v4.7.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -42,6 +42,8 @@ else:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 import time
 import random
+import shutil
+import atexit
 import threading
 from datetime import datetime, timedelta
 
@@ -62,6 +64,7 @@ THUMBS_DIR    = os.path.join(SCRIPT_DIR, 'thumbnails')
 DOWNLOADS_DIR = os.path.join(SCRIPT_DIR, 'downloads')
 PARSED_DIR    = os.path.join(SCRIPT_DIR, 'parsed')
 VIDEOLINKS    = os.path.join(SCRIPT_DIR, 'videolinks.txt')
+COOKIES_FILE  = os.path.join(SCRIPT_DIR, 'cookies.txt')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -228,7 +231,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.4{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.7.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -262,11 +265,6 @@ def _animated_startup():
     Shows real-time progress with beautiful graphics.
     """
     # ── Phase 1: Dependency check ────────────────────────────────────
-    deps = [
-        ('google-api-python-client', 'Google API Client'),
-        ('yt-dlp',                   'yt-dlp downloader'),
-    ]
-
     g_cyan  = '\033[38;5;44m'
     g_green = '\033[38;5;49m'
     g_blue  = '\033[38;5;39m'
@@ -274,41 +272,45 @@ def _animated_startup():
     print(f"  {g_blue}{C.BO}⬢{C.E}  {C.W}{C.BO}Installing | updating dependencies...{C.E}")
     print(f"  {C.DM}{'─' * 46}{C.E}\n")
 
-    for idx, (pkg, label) in enumerate(deps):
-        # Animate progress bar filling up
-        total_steps = 20
-        for step in range(total_steps + 1):
-            progress = step / total_steps
-            bar = _progress_bar_str(progress, 30, g_cyan if idx == 0 else g_green)
-            pct = int(progress * 100)
-            spinner = next(_spinner_gen)
-            status_text = 'checking' if step < total_steps // 2 else 'updating'
-            print(f"\r  {g_cyan}{spinner}{C.E}  {C.W}{label}{C.E}  {bar}  {C.DM}{pct:3d}%{C.E}  {C.DG}{status_text}{C.E}   ", end='', flush=True)
-            time.sleep(0.02)
+    label_w = max(len(d[2]) for d in _DEPS)
+    for spec, dist, label, nightly in _DEPS:
+        # Run pip in a worker thread; animate until it finishes
+        result = {}
 
-        # Actually check / update the package
-        try:
-            result = subprocess.run(
-                [sys.executable, '-m', 'pip', 'install', '--upgrade', pkg],
-                capture_output=True, text=True, timeout=60,
-            )
-            if 'Successfully installed' in result.stdout:
-                ver = ''
-                for word in result.stdout.split():
-                    if pkg.replace('-', '') in word.replace('-', '').lower():
-                        ver = word
-                        break
-                status_icon = f"{C.G}{C.BO}✓{C.E}"
-                status_msg  = f"{C.G}updated{C.E}" + (f" {C.DM}({ver}){C.E}" if ver else '')
-            else:
-                status_icon = f"{C.G}{C.BO}✓{C.E}"
-                status_msg  = f"{C.G}up to date{C.E}"
-        except Exception as e:
+        def _work():
+            try:
+                result['r'] = _pip_upgrade(spec, dist, nightly)
+            except Exception as e:
+                result['r'] = ('error', str(e)[:90])
+
+        worker = threading.Thread(target=_work, daemon=True)
+        worker.start()
+        progress = 0.0
+        while worker.is_alive():
+            progress += (0.95 - progress) * 0.04        # ease towards 95 %
+            bar = _progress_bar_str(progress, 30, g_cyan)
+            print(f"\r  {g_cyan}{next(_spinner_gen)}{C.E}  {C.W}{label:<{label_w}}{C.E}  {bar}"
+                  f"  {C.DM}{int(progress * 100):3d}%{C.E}  {C.DG}checking{C.E}   ", end='', flush=True)
+            time.sleep(0.05)
+
+        state, detail = result['r']
+        if state == 'updated':
+            status_icon = f"{C.G}{C.BO}✓{C.E}"
+            status_msg  = f"{C.G}updated{C.E} {C.DM}({detail}){C.E}"
+        elif state == 'ok':
+            status_icon = f"{C.G}{C.BO}✓{C.E}"
+            status_msg  = f"{C.G}up to date{C.E}" + (f" {C.DM}({detail}){C.E}" if detail else '')
+        else:
             status_icon = f"{C.Y}{C.BO}⚠{C.E}"
-            status_msg  = f"{C.Y}skipped ({e}){C.E}"
+            status_msg  = f"{C.Y}update failed: {detail}{C.E}"
 
-        bar_done = _progress_bar_str(1.0, 30, g_green)
-        print(f"\r  {status_icon}  {C.W}{label}{C.E}  {bar_done}  {C.DM}100%{C.E}  {status_msg}           ")
+        bar_done = _progress_bar_str(1.0, 30, g_green if state != 'error' else C.Y)
+        print(f"\r  {status_icon}  {C.W}{label:<{label_w}}{C.E}  {bar_done}  {C.DM}100%{C.E}  {status_msg}           ")
+
+    # ── Phase 1b: PO Token server ────────────────────────────────────
+    print(f"\n  {g_blue}{C.BO}⬢{C.E}  {C.W}{C.BO}PO Token provider...{C.E}")
+    print(f"  {C.DM}{'─' * 46}{C.E}")
+    setup_pot_provider()
 
     # ── Phase 2: Environment check ───────────────────────────────────
     print(f"\n  {g_blue}{C.BO}⬢{C.E}  {C.W}{C.BO}Checking environment...{C.E}")
@@ -389,26 +391,165 @@ def parse_iso_duration(iso: str) -> int:
 #  AUTO-UPDATE yt-dlp
 # ═══════════════════════════════════════════════════════════════════════
 
-def check_updates():
-    print(f"  {C.CN}{C.BO}⟳{C.E}  {C.W}Checking for yt-dlp updates...{C.E}", end='', flush=True)
+# (pip spec, distribution name, label, track nightly builds)
+# yt-dlp nightly is what the yt-dlp team recommends for YouTube: fixes for new
+# YouTube changes land there days/weeks before a stable release.
+# [default] extras bring yt-dlp-ejs (local JS challenge solver), curl_cffi, etc.
+_DEPS = [
+    ('google-api-python-client',  'google-api-python-client',  'Google API Client', False),
+    ('yt-dlp[default]',           'yt-dlp',                    'yt-dlp (nightly)',  True),
+    ('bgutil-ytdlp-pot-provider', 'bgutil-ytdlp-pot-provider', 'PO Token plugin',   False),
+    ('websocket-client',          'websocket-client',          'websocket-client',  False),
+]
+
+
+def _installed_version(dist: str) -> str | None:
     try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', '--upgrade', 'yt-dlp'],
-            capture_output=True, text=True, timeout=60,
-        )
-        if 'Successfully installed' in result.stdout:
-            # Extract the new version from pip output
-            ver = ''
-            for word in result.stdout.split():
-                if 'yt' in word.lower() and '-' in word:
-                    ver = word
-                    break
-            print(f"\r  {C.G}{C.BO}✓{C.E}  {C.G}yt-dlp updated{C.E}" +
-                  (f" {C.DM}({ver}){C.E}" if ver else '') + '          ')
+        from importlib.metadata import version
+        return version(dist)
+    except Exception:
+        return None
+
+
+def _pip_upgrade(spec: str, dist: str, nightly: bool) -> tuple:
+    """Upgrade one package. Returns (state, detail); state = 'updated' | 'ok' | 'error'."""
+    before = _installed_version(dist)
+    target = spec
+    if nightly:
+        # Pinning the exact latest pre-release lets pip install it without
+        # applying --pre to every dependency.
+        r = subprocess.run([sys.executable, '-m', 'pip', 'index', 'versions', dist, '--pre'],
+                           capture_output=True, text=True, timeout=60)
+        m = re.match(rf'{re.escape(dist)} \(([^)]+)\)', r.stdout.strip())
+        if m:
+            target = f'{spec}=={m.group(1)}'
+    r = subprocess.run([sys.executable, '-m', 'pip', 'install', '--upgrade', target],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        lines = [l for l in r.stderr.strip().splitlines() if l.strip()] or ['pip failed']
+        return 'error', lines[-1][:90]
+    after = _installed_version(dist)
+    if after and after != before:
+        return 'updated', f'{before or "—"} → {after}'
+    return 'ok', after or ''
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PO TOKEN PROVIDER (bgutil-ytdlp-pot-provider)
+# ═══════════════════════════════════════════════════════════════════════
+# The pip plugin asks a local HTTP server for YouTube "Proof of Origin" tokens
+# (BotGuard attestation, like a real browser player). The server is built once
+# from the repo tag matching the plugin version and started in the background.
+
+_POT_DIR    = os.path.join(SCRIPT_DIR, 'pot-provider')
+_POT_SERVER = os.path.join(_POT_DIR, 'server')
+_POT_URL    = 'http://127.0.0.1:4416'
+_POT_REPO   = 'https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git'
+_pot_proc   = None     # server process started by this session (stopped on exit)
+_pot_active = False    # True once tokens are available → token-backed clients used
+
+
+def _pot_ping() -> str | None:
+    """Return the running server's version, or None if it is not reachable."""
+    try:
+        with urllib.request.urlopen(_POT_URL + '/ping', timeout=1.5) as r:
+            return json.loads(r.read().decode('utf-8')).get('version')
+    except Exception:
+        return None
+
+
+def _pot_built_version() -> str | None:
+    if not os.path.isfile(os.path.join(_POT_SERVER, 'build', 'main.js')):
+        return None
+    try:
+        with open(os.path.join(_POT_SERVER, 'package.json'), encoding='utf-8') as f:
+            return json.load(f).get('version')
+    except Exception:
+        return None
+
+
+def _pot_build(version: str) -> str | None:
+    """Clone + build the server for `version`. Returns an error message or None."""
+    tools = {t: shutil.which(t) for t in ('git', 'node', 'npm', 'npx')}
+    missing = [t for t, p in tools.items() if not p]
+    if missing:
+        return f"missing {', '.join(missing)} (install Git and Node.js 22+)"
+    node_ver = subprocess.run([tools['node'], '--version'], capture_output=True, text=True).stdout
+    m = re.match(r'v(\d+)', node_ver.strip())
+    if not m or int(m.group(1)) < 22:
+        return f'Node.js 22+ required (found {node_ver.strip() or "?"})'
+    if os.path.isdir(_POT_DIR):
+        try:
+            shutil.rmtree(_POT_DIR)
+        except Exception as e:
+            return f'cannot replace old server (still running?): {e}'
+    steps = [
+        ([tools['git'], 'clone', '-q', '--depth', '1', '--single-branch',
+          '--branch', version, _POT_REPO, _POT_DIR], SCRIPT_DIR),
+        ([tools['npm'], 'ci', '--no-audit', '--no-fund'], _POT_SERVER),
+        ([tools['npx'], 'tsc'], _POT_SERVER),
+    ]
+    for cmd, cwd in steps:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            err = [l for l in (r.stderr or r.stdout).strip().splitlines() if l.strip()]
+            return f"{os.path.basename(cmd[0])} failed: {(err or ['?'])[-1][:80]}"
+    return None
+
+
+def _pot_stop():
+    if _pot_proc is not None and _pot_proc.poll() is None:
+        _pot_proc.terminate()
+
+
+def _pot_start() -> bool:
+    global _pot_proc
+    log = open(os.path.join(_POT_DIR, 'server.log'), 'w', encoding='utf-8')
+    flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+    _pot_proc = subprocess.Popen([shutil.which('node'), os.path.join('build', 'main.js')],
+                                 cwd=_POT_SERVER, stdin=subprocess.DEVNULL,
+                                 stdout=log, stderr=log, creationflags=flags)
+    atexit.register(_pot_stop)
+    for _ in range(60):
+        if _pot_ping():
+            return True
+        if _pot_proc.poll() is not None:
+            return False
+        time.sleep(0.25)
+    return False
+
+
+def setup_pot_provider():
+    """Startup: make sure the PO-token server matches the plugin and is running.
+    On success switch yt-dlp to token-backed clients (mweb + web_safari)."""
+    global _pot_active
+    plugin = _installed_version('bgutil-ytdlp-pot-provider')
+    if not plugin:
+        _ui_status('⚠', 'PO Token plugin not installed — using client spoofing only', C.Y)
+        return
+
+    running = _pot_ping()
+    if running:
+        if running != plugin:
+            _ui_status('⚠', f'PO Token server v{running} running, plugin is v{plugin} '
+                            f'— close the old server (node.exe) and restart', C.Y)
         else:
-            print(f"\r  {C.G}{C.BO}✓{C.E}  {C.G}yt-dlp is up to date{C.E}          ")
-    except Exception as e:
-        print(f"\r  {C.Y}{C.BO}⚠{C.E}  {C.Y}Could not check updates: {e}{C.E}          ")
+            _ui_status('✓', f'PO Token server v{running} (already running)', C.G)
+    else:
+        if _pot_built_version() != plugin:
+            print(f"  {C.CN}⟳  Building PO Token server v{plugin} (one-time, ~1 min)...{C.E}",
+                  flush=True)
+            err = _pot_build(plugin)
+            if err:
+                _ui_status('⚠', f'PO Token server build failed: {err}', C.Y)
+                return
+        if not _pot_start():
+            _ui_status('⚠', f'PO Token server did not start — see {_POT_DIR}{os.sep}server.log', C.Y)
+            return
+        _ui_status('✓', f'PO Token server v{plugin} started', C.G)
+
+    _YT_EXTRACTOR_ARGS['youtube']['player_client'] = list(_YT_CLIENTS_POT)
+    _pot_active = True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -775,6 +916,10 @@ _YT_EXTRACTOR_ARGS = {
         'player_client': ['visionos', 'web_safari'],
     }
 }
+# Used instead when the PO Token server is running (setup_pot_provider()):
+# mweb + PO token is the setup recommended by yt-dlp; both clients get real
+# BotGuard tokens and look like ordinary browser players.
+_YT_CLIENTS_POT = ['mweb', 'web_safari']
 
 
 def _probe_uhd_formats(url: str, cookie_opts: dict) -> tuple:
@@ -835,80 +980,6 @@ def _pick_uhd_resolution(available: list) -> str:
         return ''
 
 
-# Browsers supported by yt-dlp --cookies-from-browser
-_BROWSERS = {
-    '1': 'chrome',
-    '2': 'firefox',
-    '3': 'edge',
-    '4': 'brave',
-    '5': 'opera',
-    '6': 'chromium',
-}
-
-def _find_chrome_cookie_db() -> str | None:
-    """Search for Chrome's cookie DB across all known profile folders."""
-    import glob
-    local = os.environ.get('LOCALAPPDATA', '')
-    patterns = [
-        os.path.join(local, 'Google', 'Chrome',       'User Data', '*', 'Network', 'Cookies'),
-        os.path.join(local, 'Google', 'Chrome',       'User Data', '*', 'Cookies'),
-        os.path.join(local, 'Google', 'Chrome Beta',  'User Data', '*', 'Network', 'Cookies'),
-        os.path.join(local, 'Google', 'Chrome SxS',   'User Data', '*', 'Network', 'Cookies'),
-    ]
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            # Prefer 'Default' profile
-            for m in matches:
-                if 'Default' in m:
-                    return m
-            return matches[0]
-    return None
-
-
-def _copy_browser_db_to_temp(browser: str) -> str | None:
-    """
-    Pre-copy Chrome's locked cookie DB using sqlite3 backup (bypasses WAL lock).
-    NOTE: Chrome 127+ uses App-Bound Encryption — the DB copy will contain
-    encrypted values that cannot be decrypted outside Chrome. In that case
-    the copy succeeds but yt-dlp still cannot authenticate.
-    Returns path to temp copy, or None if not applicable / not found.
-    """
-    import sqlite3, shutil, tempfile
-    if browser != 'chrome':
-        return None
-
-    src = _find_chrome_cookie_db()
-    if not src:
-        print(f"  {C.Y}Warning: Chrome cookie DB not found under %LOCALAPPDATA%.{C.E}")
-        return None
-
-    tmp = tempfile.NamedTemporaryFile(prefix='yt_chrome_cookies_', suffix='.db', delete=False)
-    tmp.close()
-
-    # Try sqlite3.backup with immutable flag (reads locked WAL DB without acquiring lock)
-    try:
-        uri = 'file:{}?mode=ro&nolock=1&immutable=1'.format(src.replace('\\', '/'))
-        src_conn = sqlite3.connect(uri, uri=True)
-        dst_conn = sqlite3.connect(tmp.name)
-        src_conn.backup(dst_conn)
-        src_conn.close()
-        dst_conn.close()
-        return tmp.name
-    except Exception:
-        pass
-
-    # Fallback: plain file copy
-    try:
-        shutil.copy2(src, tmp.name)
-        return tmp.name
-    except Exception as e:
-        print(f"  {C.Y}Warning: could not copy cookie DB — {e}{C.E}")
-        if os.path.isfile(tmp.name):
-            os.remove(tmp.name)
-        return None
-
-
 # ── Cookie file candidates (in order of priority) ──────────────────────
 _COOKIE_CANDIDATES = ['cookies.txt', 'www.youtube.com_cookies.txt', 'youtube_cookies.txt']
 
@@ -954,6 +1025,22 @@ def _validate_cookie_file(cfile: str) -> bool:
         return False
 
 
+def _fresh_cookie_opts() -> dict | None:
+    """Export fresh cookies from the dedicated browser profile (cookie_extractor.py)
+    into cookies.txt, validate them and return yt-dlp cookie opts, or None."""
+    try:
+        import cookie_extractor
+    except ImportError as e:
+        print(f"  {C.R}✗  cookie_extractor.py not available: {e}{C.E}")
+        return None
+    if not cookie_extractor.ensure_cookies(COOKIES_FILE):
+        print(f"  {C.Y}  Run extract_cookies.cmd to set up / sign in, then try again.{C.E}")
+        return None
+    if not _validate_cookie_file(COOKIES_FILE):
+        return None
+    return {'cookiefile': COOKIES_FILE, '_cookie_mode': 'file'}
+
+
 def _scan_dir_for_cookies(directory: str) -> str | None:
     """Scan a directory for a Netscape cookies file. Returns path or None."""
     for name in _COOKIE_CANDIDATES:
@@ -967,34 +1054,18 @@ def _pick_cookie_source() -> dict:
     """
     Ask the user how to handle cookies.
     Returns a dict of yt-dlp options to merge, plus a special key
-    '_cookie_mode' = 'none' | 'browser' | 'file' for retry logic.
+    '_cookie_mode' = 'none' | 'file' for retry logic.
     """
     _ui_header('Cookies | Authentication', C.Y)
-    print(f"  {C.DM}Built-in VisionOS/Safari spoofing bypasses bot detection without login.{C.E}\n")
-    _ui_menu_item('1', 'No cookies', C.G, 'VisionOS/Safari client bypass')
-    _ui_menu_item('2', 'Use cookies from browser', C.CN)
-    print(f"      {C.Y}⚠  Chrome 127+ blocks extraction (App-Bound Encryption){C.E}")
+    bypass = 'PO tokens + mweb/Safari clients' if _pot_active else 'VisionOS/Safari client bypass'
+    _ui_menu_item('1', 'No cookies', C.G, bypass)
+    _ui_menu_item('2', 'Fresh cookies from tool browser profile', C.CN, '← recommended if blocked')
+    print(f"      {C.DM}Auto-exports a signed-in session to cookies.txt (same as extract_cookies.cmd){C.E}")
     _ui_menu_item('3', 'Use cookies from a .txt file', C.G, '← for private/age-gated videos')
-    print(f"      {C.DM}Export via \'Get cookies.txt LOCALLY\' (Chrome) or \'cookies.txt\' (Firefox){C.E}")
     ch = _ui_prompt()
 
     if ch == '2':
-        print(f"\n  {C.CN}{C.BO}Select browser:{C.E}")
-        for k, v in _BROWSERS.items():
-            _ui_menu_item(k, v.capitalize(), C.CN)
-        bch = _ui_prompt()
-        browser = _BROWSERS.get(bch, 'chrome')
-        print(f"  {C.G}Will use cookies from: {browser}{C.E}")
-
-        if browser == 'chrome':
-            print(f"  {C.Y}⚠  Chrome 127+ uses App-Bound Encryption — this may fail.{C.E}")
-            print(f"  {C.Y}   If it does, use Firefox (option 2→2) or cookies.txt (option 3).{C.E}")
-
-        # yt-dlp reads the cookie DB directly — browser must be CLOSED
-        print(f"  {C.Y}   Close {browser.capitalize()} completely, then press Enter.{C.E}")
-        input("  Press Enter when ready: ")
-        return {'cookiesfrombrowser': (browser, None, None, None),
-                '_cookie_mode': 'browser', '_browser': browser}
+        return _fresh_cookie_opts() or {'_cookie_mode': 'none'}
 
     if ch == '3':
         # ── Option 3: cookies.txt file ─────────────────────────────────
@@ -1485,41 +1556,6 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     return True
 
 
-def _cleanup_tmp_cookie_db(cookie_opts: dict):
-    """Delete the temp cookie DB file if one was created."""
-    tmp = cookie_opts.get('_tmp_cookie_db')
-    if tmp and os.path.isfile(tmp):
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
-
-
-_COOKIE_DB_ERROR_SIGNALS = [
-    'could not copy',
-    'cookie database',
-    'database is locked',
-    'unable to open database',
-]
-
-
-def _is_cookie_db_error(msg: str) -> bool:
-    ml = msg.lower()
-    return any(s in ml for s in _COOKIE_DB_ERROR_SIGNALS)
-
-
-def _print_cookie_db_help(browser: str):
-    print(f"\n{C.R}  ✗ Could not read {browser.capitalize()} cookie database.{C.E}")
-    print(f"  {C.Y}This usually means the browser is still running.{C.E}")
-    print(f"  {C.Y}Solutions:{C.E}")
-    print(f"    1. Close ALL {browser.capitalize()} windows completely, then try again.")
-    print(f"    2. Export cookies to a .txt file using a browser extension:")
-    print(f"       • Chrome/Edge: 'Get cookies.txt LOCALLY' extension")
-    print(f"       • Firefox: 'cookies.txt' extension")
-    print(f"       Then choose option 3 (cookies from file) in the menu.")
-    print(f"    3. Try a different browser (e.g. Firefox or Edge).\n")
-
-
 def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
     """Download a list of URLs via yt-dlp into out_dir, re-encode to MP4, save metadata.
 
@@ -1537,63 +1573,51 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
     quality_opts  = _pick_quality()
     cookie_opts   = _pick_cookie_source()
     cookie_mode   = cookie_opts.get('_cookie_mode', 'none')
-    browser_name  = cookie_opts.get('_browser', 'chrome')
 
     # ── Ultra High (4K/8K) mode — probe + resolve format per URL ────────
     if quality_opts.pop('_quality_mode', None) == 'ultra_high':
         uhd_pp = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
-        try:
-            from yt_dlp import YoutubeDL
-            for i, url in enumerate(urls, 1):
-                if i > 1:
-                    _polite_pause(i - 1)
-                # Resolve UHD format for this URL
-                while True:
-                    print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
-                    try:
-                        available, probed = _probe_uhd_formats(url, cookie_opts)
-                    except Exception as e:
-                        print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
+        for i, url in enumerate(urls, 1):
+            if i > 1:
+                _polite_pause(i - 1)
+            # Resolve UHD format for this URL
+            while True:
+                print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
+                try:
+                    available, probed = _probe_uhd_formats(url, cookie_opts)
+                except Exception as e:
+                    print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
+                    _print_bot_block_help(len(urls) - i + 1, from_videolinks)
+                    return
+                if not available:
+                    print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
+                    _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
+                    _ui_menu_item('2', 'Back to main menu', C.DG)
+                    ch = _ui_prompt()
+                    if ch == '2':
+                        return
+                    break  # skip this URL
+                fmt = _pick_uhd_resolution(available)
+                if fmt == '':  # user chose 'back' in the resolution picker
+                    continue  # re-prompt probing (same URL)
+                # Build per-URL opts
+                url_quality = {
+                    'format': fmt,
+                    'merge_output_format': 'mp4',
+                    'postprocessors': uhd_pp,
+                }
+                url_opts = _build_ydl_opts(out_dir, url_quality, cookie_opts)
+                try:
+                    with YoutubeDL(url_opts) as ydl:
+                        _download_one(ydl, url, i, len(urls), out_dir,
+                                      from_videolinks=from_videolinks, raw=probed)
+                except Exception as e:
+                    err_msg = str(e)
+                    print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
+                    if _is_bot_error(err_msg):
                         _print_bot_block_help(len(urls) - i + 1, from_videolinks)
                         return
-                    if not available:
-                        print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
-                        _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
-                        _ui_menu_item('2', 'Back to main menu', C.DG)
-                        ch = _ui_prompt()
-                        if ch == '2':
-                            return
-                        break  # skip this URL
-                    fmt = _pick_uhd_resolution(available)
-                    if fmt == '':  # user chose 'back' in the resolution picker
-                        continue  # re-prompt probing (same URL)
-                    # Build per-URL opts
-                    url_quality = {
-                        'format': fmt,
-                        'merge_output_format': 'mp4',
-                        'postprocessors': uhd_pp,
-                    }
-                    url_opts = _build_ydl_opts(out_dir, url_quality, cookie_opts)
-                    try:
-                        with YoutubeDL(url_opts) as ydl:
-                            try:
-                                _download_one(ydl, url, i, len(urls), out_dir,
-                                              from_videolinks=from_videolinks,
-                                              raw=probed)
-                            except Exception as e:
-                                err_msg = str(e)
-                                if _is_cookie_db_error(err_msg):
-                                    _print_cookie_db_help(browser_name)
-                                    return
-                                print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
-                                if _is_bot_error(err_msg):
-                                    _print_bot_block_help(len(urls) - i + 1, from_videolinks)
-                                    return
-                    except Exception as e:
-                        print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
-                    break  # move to next URL
-        finally:
-            _cleanup_tmp_cookie_db(cookie_opts)
+                break  # move to next URL
         print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")
         return
 
@@ -1604,57 +1628,35 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
     failed_urls = []
 
-    try:
-        with YoutubeDL(base_opts) as ydl:
-            for i, url in enumerate(urls, 1):
-                try:
-                    _download_one(ydl, url, i, len(urls), out_dir,
-                                  from_videolinks=from_videolinks)
-                except Exception as e:
-                    err_msg = str(e)
+    with YoutubeDL(base_opts) as ydl:
+        for i, url in enumerate(urls, 1):
+            try:
+                _download_one(ydl, url, i, len(urls), out_dir,
+                              from_videolinks=from_videolinks)
+            except Exception as e:
+                err_msg = str(e)
+                print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
 
-                    # Cookie database locked / copy error
-                    if _is_cookie_db_error(err_msg):
-                        _print_cookie_db_help(browser_name)
-                        break  # no point continuing, all URLs will hit the same error
+                # Bot block: stop right away — every further request deepens the flag
+                if _is_bot_error(err_msg):
+                    if cookie_mode == 'none':
+                        print(f"  {C.Y}↳ Bot/auth block detected — will retry the rest with fresh cookies.{C.E}")
+                        failed_urls = urls[i - 1:]
+                    else:
+                        _print_bot_block_help(len(urls) - i + 1, from_videolinks)
+                    break
+                print()
+            if i < len(urls):
+                _polite_pause(i)
 
-                    print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
-
-                    # Bot block: stop right away — every further request deepens the flag
-                    if _is_bot_error(err_msg):
-                        if cookie_mode == 'none':
-                            print(f"  {C.Y}↳ Bot/auth block detected — will retry the rest with browser cookies.{C.E}")
-                            failed_urls = urls[i - 1:]
-                        else:
-                            _print_bot_block_help(len(urls) - i + 1, from_videolinks)
-                        break
-                    print()
-                if i < len(urls):
-                    _polite_pause(i)
-    finally:
-        _cleanup_tmp_cookie_db(cookie_opts)
-
-    # ── Auto-retry with browser cookies ────────────────────────────────
+    # ── Auto-retry with fresh cookies from the tool browser profile ────
     if failed_urls:
-        _ui_header(f'Retrying {len(failed_urls)} blocked video(s) with browser cookies', C.Y)
-        for k, v in _BROWSERS.items():
-            _ui_menu_item(k, v.capitalize(), C.CN)
-        bch = _ui_prompt()
-        browser = _BROWSERS.get(bch, 'chrome')
-
-        # Try to pre-copy the cookie DB before yt-dlp touches it
-        tmp_db = _copy_browser_db_to_temp(browser)
-        if tmp_db:
-            print(f"  {C.G}✓ Cookie DB pre-copied (Chrome snapshot).{C.E}\n")
-            retry_cookie_opts = {'cookiefile': tmp_db, '_tmp_cookie_db': tmp_db}
+        _ui_header(f'Retrying {len(failed_urls)} blocked video(s) with fresh cookies', C.Y)
+        retry_cookie_opts = _fresh_cookie_opts()
+        if not retry_cookie_opts:
+            _print_bot_block_help(len(failed_urls), from_videolinks)
         else:
-            print(f"  {C.Y}⚠  Make sure {browser.capitalize()} is fully closed, then press Enter.{C.E}")
-            input("  Press Enter when ready: ")
-            retry_cookie_opts = {'cookiesfrombrowser': (browser, None, None, None)}
-
-        retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
-
-        try:
+            retry_opts = _build_ydl_opts(out_dir, quality_opts, retry_cookie_opts)
             with YoutubeDL(retry_opts) as ydl_retry:
                 for i, url in enumerate(failed_urls, 1):
                     try:
@@ -1662,17 +1664,12 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                                       from_videolinks=from_videolinks)
                     except Exception as e:
                         err_msg = str(e)
-                        if _is_cookie_db_error(err_msg):
-                            _print_cookie_db_help(browser)
-                            break
                         print(f"\n  {C.R}✗  Retry failed: {err_msg[:200]}{C.E}\n")
                         if _is_bot_error(err_msg):
                             _print_bot_block_help(len(failed_urls) - i + 1, from_videolinks)
                             break
                     if i < len(failed_urls):
                         _polite_pause(i)
-        finally:
-            _cleanup_tmp_cookie_db(retry_cookie_opts)
 
     print(f"\n  {C.DM}{'─' * 46}{C.E}")
     print(f"  {C.G}{C.BO}✦{C.E}  {C.G}All done → {out_dir}{C.E}")

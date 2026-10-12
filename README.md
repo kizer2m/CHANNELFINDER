@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.6.4
+# YouTube Channel Finder v4.7.0
 
 A powerful **cross-platform** command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation. Runs on **Windows, macOS, and Linux** with no platform-specific dependencies.
 
@@ -69,13 +69,14 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
 - Re-encodes to MP4 automatically via FFmpeg
 - **🍪 Cookie / Authentication support**:
   - Choose how to handle YouTube authentication before every download:
-    - **No cookies** — try without authentication first
-    - **Browser cookies** — extract cookies from Firefox, Edge, Brave, Opera, or Chromium (Chrome 127+ may fail due to App-Bound Encryption)
+    - **No cookies** — PO tokens + browser-like player clients (works for most public videos)
+    - **Fresh cookies from tool browser profile** — exports a signed-in session to `cookies.txt` automatically (see [Cookie Extractor](#-cookie-extractor-extract_cookiescmd))
     - **Cookies file** — supply a Netscape-format `cookies.txt` file:
       - Press `[Enter]` to auto-scan the script folder for `cookies.txt` automatically
       - Or type a custom path to a file or folder — the script auto-detects `cookies.txt`, `www.youtube.com_cookies.txt`, `youtube_cookies.txt`
       - **Cookie validation**: the tool tests cookies against YouTube before starting any download. If cookies are expired or invalid, an error is shown immediately
-  - If downloading fails due to a bot-detection block, the tool automatically retries blocked videos with browser cookies
+  - If a bot-detection block hits a no-cookie batch, the rest of the batch is retried with fresh cookies from the tool profile
+- **🛡️ Anti-bot pacing**: one extraction per video, random 6–14 s pauses between videos and a 1.5–3 min break every 25 videos; the batch stops at the first block instead of hammering YouTube
 - **Auto-remove completed URLs**: each URL is removed from `videolinks.txt` immediately after a successful download, so interrupted sessions resume cleanly from where they left off
 - **JavaScript challenge solver** — uses Node.js + EJS remote component to decrypt YouTube stream URLs (required since 2025; without it only storyboard thumbnails are available)
 - **CStyle Console download UI**:
@@ -113,7 +114,13 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
 - First valid key is selected automatically as the starting key
 
 ### 🔄 Auto-Update
-- Checks for `yt-dlp` updates on every launch and upgrades automatically
+- On every launch updates all dependencies and shows the installed version (or the pip error if an update fails)
+- `yt-dlp` follows the **nightly** channel (recommended by yt-dlp for YouTube — fixes arrive there first), with `[default]` extras
+
+### 🎫 PO Token Provider
+- Uses [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) to generate YouTube *Proof-of-Origin* tokens, the same BotGuard attestation a real browser player sends
+- On first launch the token server is cloned and built into `pot-provider/` (needs Git + Node.js 22+, ~1 min); it is rebuilt automatically when the plugin version changes
+- Started in the background on launch and stopped on exit; while it runs, yt-dlp uses the token-backed `mweb` + `web_safari` clients
 
 ### 🗂️ Startup Environment Check
 - Runs automatically after the update check on every launch
@@ -135,9 +142,11 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
 - **FFmpeg** — required for video merging and MP4 conversion
   - Download from [ffmpeg.org](https://ffmpeg.org/download.html)
   - Add to system PATH
-- **Node.js** — **required** for YouTube JS challenge solving (stream URL decryption)
+- **Node.js 22+** — **required** for YouTube JS challenge solving and the PO Token server
   - Download from [nodejs.org](https://nodejs.org/)
   - Add to system PATH
+- **Git** — used once to fetch the PO Token server ([git-scm.com](https://git-scm.com/))
+- **Google Chrome or Microsoft Edge** — used by the Cookie Extractor (optional)
 
 ### Setup
 
@@ -149,7 +158,9 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
    ```
    This installs:
    - `google-api-python-client` — YouTube Data API
-   - `yt-dlp` — video downloading
+   - `yt-dlp[default]` — video downloading
+   - `bgutil-ytdlp-pot-provider` — PO Token plugin for yt-dlp
+   - `websocket-client` — used by the Cookie Extractor
 
 3. **Add your API keys** to `api_keys.txt` (one key per line):
    ```
@@ -170,87 +181,34 @@ A powerful **cross-platform** command-line tool for searching YouTube videos, pa
 
 ## Fixing "Sign in to confirm you're not a bot"
 
-YouTube increasingly blocks anonymous downloads. The tool handles this in two ways:
+YouTube limits anonymous sessions to roughly **300 videos / hour**. The tool stays under that by itself (PO tokens, one request per video, random pauses). If a block still happens:
 
-### Option A — Let the tool auto-retry (easiest)
-1. When the cookie prompt appears, pick **1 (No cookies)** and start the download
-2. If a video is blocked, the tool will print:
-   ```
-   ↳ Bot/auth block detected — will retry with browser cookies.
-   ```
-3. After the batch finishes you'll be asked which browser to use for the retry — that's it
+1. **Wait 30–60 minutes** — guest blocks are temporary. Unfinished URLs stay in `videolinks.txt`; resume with Mode 4.
+2. **Use a signed-in session** — accounts get a much higher limit (~2000 videos / hour). Pick **2 (Fresh cookies from tool browser profile)** in the cookie menu. A secondary Google account is recommended.
 
-### Option B — Use a cookies.txt file (most reliable)
+> ℹ️ VPNs / Cloudflare WARP don't help: shared IPs are flagged by Google *more*, not less.
 
-Export YouTube cookies using the **"Get cookies.txt LOCALLY"** Chrome extension and feed them to the script. This is the most reliable method because it works regardless of Chrome's App-Bound Encryption (127+).
+### 🍪 Cookie Extractor (`extract_cookies.cmd`)
 
-#### Step 1 — Install the extension
+Chrome 127+ and Edge encrypt cookies with *App-Bound Encryption* — nothing outside the browser (including yt-dlp's `--cookies-from-browser`) can read them. The extractor solves this by letting the browser itself hand the cookies over:
 
-1. Open **Google Chrome** (or Edge/Brave — any Chromium browser)
-2. Go to the Chrome Web Store:  
-   👉 [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-3. Click **"Add to Chrome"** → confirm **"Add extension"**
-4. *(Optional)* Pin the extension to the toolbar:
-   - Click the **puzzle icon** 🧩 in the top-right of Chrome
-   - Find **"Get cookies.txt LOCALLY"** and click the **pin** 📌 icon
+- It keeps a **separate browser profile** in `browser_profile/` — your main Chrome is never touched and may stay open
+- **First run:** a normal Chrome/Edge window opens — sign in to YouTube, then **close the window**
+- **After that:** the profile is opened invisibly, youtube.com is loaded (refreshing the session), the cookies are written to `cookies.txt` and the browser closes (~10 s)
+- Because only the tool opens this profile, YouTube does not rotate the exported session — no more "cookies expired after a few hours"
 
-#### Step 2 — Log into YouTube
-
-1. Go to [youtube.com](https://www.youtube.com) in the same browser
-2. Make sure you are **logged into your Google account**
-3. Verify by checking that your **profile avatar** appears in the top-right corner (not a "Sign in" button)
-
-#### Step 3 — Export cookies
-
-1. Stay on **youtube.com** (any YouTube page works)
-2. Click the **"Get cookies.txt LOCALLY"** extension icon in the toolbar (or via the puzzle menu)
-3. The extension popup will open showing a list of cookies for the current site
-4. Click **"Export"** (or **"Export as cookies.txt"** — exact label may vary)
-5. A file named `www.youtube.com_cookies.txt` (or `cookies.txt`) will be **downloaded to your Downloads folder**
-
-#### Step 4 — Place the cookies file
-
-Move the exported `.txt` file to the **script folder** (where `youtube_finder.py` is located):
-
+Run it standalone:
+```bash
+extract_cookies.cmd              # menu: refresh / sign in / import from Firefox
+python cookie_extractor.py --refresh   # non-interactive refresh (exit code 0 = ok)
 ```
-CHANNELFINDER/
-├── youtube_finder.py
-├── cookies.txt          ← place the exported file here
-└── ...
-```
+or pick **2** in the cookie menu of any download — the same refresh runs automatically.
 
-> 💡 **Tip:** The script auto-detects any of these filenames:  
-> `cookies.txt`, `www.youtube.com_cookies.txt`, `youtube_cookies.txt`  
-> So you can keep the original filename — no renaming needed.
+> 🔒 `cookies.txt` and `browser_profile/` contain your login session — they are gitignored; never share them.
 
-#### Step 5 — Use in the script
+### Manual alternative — cookies.txt from an extension
 
-1. Run `youtube_finder.py`
-2. When the **Cookies / Authentication** menu appears, pick **3** (Use cookies from a .txt file)
-3. Press **Enter** to auto-scan the script folder — the file will be found automatically
-4. The script **validates** the cookies against YouTube before starting any download
-5. If validation passes (**OK ✓**) — downloads will proceed with full authentication
-
-#### ⚠️ When cookies expire
-
-Chrome rotates session tokens every few hours as a security measure. If you see this error:
-
-```
-Cookie validation failed — cookies are expired or invalid.
-Re-export cookies from your browser and try again.
-```
-
-Simply **repeat Steps 3–4**: go to YouTube, click the extension, export fresh cookies, and replace the old file. This takes about 10 seconds.
-
-> 💡 **Tip:** Don't close Chrome between exporting cookies and starting the download — the cookies are valid for the current active session. The faster you use them, the less chance they'll expire.
-
-### Option C — Browser cookies (direct extraction)
-1. When the cookie prompt appears, pick **2 (Use cookies from browser)**
-2. Select your browser (Firefox / Edge / Brave / Opera / Chromium)
-3. Make sure you are **logged into YouTube** in that browser and the browser is **fully closed**
-
-> ⚠️ **Chrome 127+** uses App-Bound Encryption — cookie extraction will likely fail.  
-> Use Firefox or Edge instead, or export a `cookies.txt` file (Option B).
+Export cookies with the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) extension while on youtube.com, put the file in the script folder and pick **3** in the cookie menu. Cookies exported from your everyday browser expire within hours because the browser keeps rotating the session.
 
 ---
 
@@ -278,6 +236,11 @@ CHANNELFINDER/
 ├── api_keys.txt         # API keys (one per line)
 ├── requirements.txt     # Python dependencies
 ├── run_search.cmd       # Windows launcher
+├── cookie_extractor.py  # Cookie Extractor (fresh cookies.txt from a dedicated browser profile)
+├── extract_cookies.cmd  # Cookie Extractor launcher
+├── cookies.txt          # Exported cookies (gitignored)
+├── browser_profile/     # Dedicated browser profile for cookies (gitignored)
+├── pot-provider/        # PO Token server, built on first launch (gitignored)
 ├── videolinks.txt       # URLs for batch download (Mode 3)
 ├── find.txt             # Saved search results (links)
 ├── thumbnails/          # Downloaded thumbnails
@@ -289,7 +252,7 @@ CHANNELFINDER/
 
 ## Version
 
-Current version: **v4.6.4**
+Current version: **v4.7.0**
 
 > Detailed change history is maintained in `GEMINI.md` and `CLAUDE.md` (AI session context files, not tracked in git).
 
