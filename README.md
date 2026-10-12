@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.7.0
+# YouTube Channel Finder v4.7.1
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -255,7 +255,7 @@ Everything below `requirements.txt` is created by the tool and excluded from git
 
 ## Version
 
-Current version: **v4.7.0**
+Current version: **v4.7.1**
 
 ---
 

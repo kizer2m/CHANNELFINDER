@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.7.0
+YouTube Channel Finder v4.7.1
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -231,7 +231,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.7.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.7.1{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -564,15 +564,19 @@ class KeyManager:
 
     def _load(self, path: str):
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                keys = [line.strip() for line in f if line.strip()]
-            if not keys:
-                print(f"  {C.R}✗  No API keys found in {path}{C.E}")
-                sys.exit(1)
-            return keys
+            # utf-8-sig: Notepad may save with a BOM that would corrupt the first key
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                keys = [s for s in (line.strip() for line in f)
+                        if s and not s.startswith('#')]   # skip template/comment lines
         except FileNotFoundError:
-            print(f"  {C.R}✗  {path} not found{C.E}")
+            keys = []
+        if not keys:
+            print(f"\n  {C.R}{C.BO}✗  No API keys found in {path}{C.E}")
+            print(f"  {C.Y}   Add your YouTube Data API v3 key(s) to this file, one per line.{C.E}")
+            print(f"  {C.DM}   How to get a key: see \"Getting a YouTube API key\" in README.md{C.E}\n")
+            input("  Press Enter to exit...")
             sys.exit(1)
+        return keys
 
     def key(self) -> str:
         return self.keys[self.idx]
