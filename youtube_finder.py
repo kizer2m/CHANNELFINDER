@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.8.0
+YouTube Channel Finder v4.9.0
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -232,7 +232,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.8.0{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.9.0{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -737,23 +737,161 @@ def search_youtube_all(km: KeyManager, query: str, filters: dict) -> list:
 
 
 def get_channel_stats(km: KeyManager, channel_ids: list) -> dict:
-    """Fetch channel statistics for a list of IDs."""
-    if not channel_ids:
-        return {}
-    resp = api_call(km, lambda yt: yt.channels().list(
-        part="snippet,statistics", id=','.join(channel_ids[:50])))
-    if not resp:
-        return {}
+    """Fetch channel statistics for a list of IDs (any number, 50 per API call)."""
     out = {}
-    for it in resp.get('items', []):
-        s = it.get('statistics', {})
-        out[it['id']] = dict(
-            title=it['snippet']['title'],
-            subs=s.get('subscriberCount', '?'),
-            vids=s.get('videoCount', '?'),
-            views=s.get('viewCount', '?'),
+    for cid, d in fetch_channel_details(km, channel_ids).items():
+        out[cid] = dict(
+            title=d['title'],
+            subs='?' if d['subs'] is None else d['subs'],
+            vids=d['videos'],
+            views=d['views'],
         )
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  VIDEO / CHANNEL DETAILS + CSV EXPORT (shared by Modes 1, 3, 6, 8)
+# ═══════════════════════════════════════════════════════════════════════
+
+EXPORTS_DIR = os.path.join(SCRIPT_DIR, 'exports')
+
+
+def _chunks(seq: list, n: int = 50):
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
+def _days_since(iso: str) -> int:
+    try:
+        dt = datetime.strptime(iso[:19], '%Y-%m-%dT%H:%M:%S')
+        return max(1, (datetime.utcnow() - dt).days)
+    except (ValueError, TypeError):
+        return 1
+
+
+def _fmt_num(n) -> str:
+    """1234 → 1.2K, 3456789 → 3.5M; None → '—'."""
+    if n is None:
+        return '—'
+    n = float(n)
+    for div, suf in ((1e9, 'B'), (1e6, 'M'), (1e3, 'K')):
+        if abs(n) >= div:
+            return f"{n / div:.1f}{suf}"
+    return f"{n:.0f}"
+
+
+def _fmt_duration(secs: int) -> str:
+    h, rest = divmod(int(secs or 0), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def fetch_video_details(km: KeyManager, video_ids: list) -> dict:
+    """videos.list for any number of IDs (1 quota unit per 50). Returns {id: details}."""
+    out = {}
+    ids = list(dict.fromkeys(v for v in video_ids if v))
+    for chunk in _chunks(ids):
+        resp = api_call(km, lambda yt, c=chunk: yt.videos().list(
+            part="snippet,contentDetails,statistics", id=','.join(c)))
+        for it in (resp or {}).get('items', []):
+            sn, st = it.get('snippet', {}), it.get('statistics', {})
+            out[it['id']] = dict(
+                id=it['id'],
+                title=sn.get('title', ''),
+                channelId=sn.get('channelId', ''),
+                channelTitle=sn.get('channelTitle', ''),
+                publishedAt=sn.get('publishedAt', ''),
+                seconds=parse_iso_duration(it.get('contentDetails', {}).get('duration', '')),
+                views=int(st.get('viewCount', 0)),
+                likes=int(st['likeCount']) if 'likeCount' in st else None,
+                comments=int(st['commentCount']) if 'commentCount' in st else None,
+            )
+    return out
+
+
+def fetch_channel_details(km: KeyManager, channel_ids: list) -> dict:
+    """channels.list for any number of IDs (1 quota unit per 50). Returns {id: details}."""
+    out = {}
+    ids = list(dict.fromkeys(c for c in channel_ids if c))
+    for chunk in _chunks(ids):
+        resp = api_call(km, lambda yt, c=chunk: yt.channels().list(
+            part="snippet,statistics", id=','.join(c)))
+        for it in (resp or {}).get('items', []):
+            sn, st = it.get('snippet', {}), it.get('statistics', {})
+            hidden = st.get('hiddenSubscriberCount') or 'subscriberCount' not in st
+            out[it['id']] = dict(
+                id=it['id'],
+                title=sn.get('title', ''),
+                handle=sn.get('customUrl', ''),
+                country=sn.get('country', ''),
+                created=sn.get('publishedAt', ''),
+                subs=None if hidden else int(st['subscriberCount']),
+                views=int(st.get('viewCount', 0)),
+                videos=int(st.get('videoCount', 0)),
+            )
+    return out
+
+
+def _video_rows(details: dict, channels: dict = None, extra: dict = None) -> list:
+    """Flatten video details (+ optional channel details) into CSV rows."""
+    rows = []
+    for v in details.values():
+        ch = (channels or {}).get(v['channelId'], {})
+        row = {
+            'Title': v['title'],
+            'URL': f"https://www.youtube.com/watch?v={v['id']}",
+            'Channel': v['channelTitle'],
+            'Channel URL': f"https://www.youtube.com/channel/{v['channelId']}",
+            'Published': v['publishedAt'][:10],
+            'Duration': _fmt_duration(v['seconds']),
+            'Duration (s)': v['seconds'],
+            'Views': v['views'],
+            'Likes': v['likes'] if v['likes'] is not None else '',
+            'Comments': v['comments'] if v['comments'] is not None else '',
+            'Views per day': round(v['views'] / _days_since(v['publishedAt'])),
+        }
+        if channels is not None:
+            row['Channel subscribers'] = ch.get('subs') if ch.get('subs') is not None else ''
+        row.update((extra or {}).get(v['id'], {}))
+        rows.append(row)
+    return rows
+
+
+def export_csv(rows: list, name: str) -> str | None:
+    """Write rows (list of dicts) to exports/<name>_<date>.csv.
+
+    ';' separator + UTF-8 BOM → opens correctly in Excel (incl. Russian
+    locale) by double-click; Google Sheets / LibreOffice detect it too.
+    """
+    import csv
+    if not rows:
+        print(f"  {C.Y}⚠  Nothing to export.{C.E}")
+        return None
+    os.makedirs(EXPORTS_DIR, exist_ok=True)
+    stamp = datetime.now().strftime('%Y-%m-%d_%H%M')
+    path = os.path.join(EXPORTS_DIR, f"{safe_filename(name)[:80]}_{stamp}.csv")
+    # Union of all keys in first-seen order — rows may carry optional columns
+    fields = list(dict.fromkeys(k for r in rows for k in r))
+    try:
+        with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=fields, delimiter=';', restval='')
+            w.writeheader()
+            w.writerows(rows)
+    except OSError as e:
+        print(f"  {C.R}✗  Export failed: {e}{C.E}")
+        return None
+    print(f"  {C.G}✓{C.E}  {C.G}Exported {len(rows)} row(s) → {path}{C.E}")
+    return path
+
+
+def export_videos_csv(km: KeyManager, video_ids: list, name: str, extra: dict = None):
+    """Fetch details for video IDs and export them (+ channel subscribers)."""
+    print(f"  {C.CN}⟳  Loading statistics for {len(video_ids)} video(s)...{C.E}")
+    details = fetch_video_details(km, video_ids)
+    channels = fetch_channel_details(km, [v['channelId'] for v in details.values()])
+    # keep the original order
+    ordered = {vid: details[vid] for vid in video_ids if vid in details}
+    export_csv(_video_rows(ordered, channels, extra), name)
 
 
 def _print_result_item(i: int, it: dict, ch_stats: dict):
@@ -1928,6 +2066,7 @@ def search_post_menu(results: list, query: str, km: KeyManager, page_size: int =
         _ui_menu_item('4', 'Download videos', C.G, 'yt-dlp → MP4')
         _ui_menu_item('5', 'Show channel analytics', C.B)
         _ui_menu_item('6', 'New search', C.Y)
+        _ui_menu_item('7', 'Export to CSV (Excel)', C.G, 'views, likes, dates, subscribers')
         _ui_menu_back('0', 'Back to main menu')
         ch = _ui_prompt()
 
@@ -1958,6 +2097,9 @@ def search_post_menu(results: list, query: str, km: KeyManager, page_size: int =
                 print(f"  {C.Y}⚠  Could not load channel stats.{C.E}")
         elif ch == '6':
             return 'search'
+        elif ch == '7':
+            ids = [it['id']['videoId'] for it in results if it['id'].get('videoId')]
+            export_videos_csv(km, ids, f"search_{query}")
         elif ch == '0':
             return 'menu'
 
@@ -2280,19 +2422,23 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str,
         return
 
 
-def mode_parse(km: KeyManager):
-    """Channel parsing mode with post-parse download menu."""
+def mode_parse(km: KeyManager, channel: tuple = None):
+    """Channel parsing mode with post-parse download menu.
+    channel — optional (channel_id, title) to skip the prompt (used by Mode 8)."""
     _ui_header('Channel Parser', C.H)
-    print(f"  {C.DM}Paste a channel URL or @handle (e.g. @MrBeast){C.E}")
-    user_in = input(f"  {C.CN}›{C.E} ").strip()
-    if not user_in:
-        return
+    if channel:
+        cid, ctitle = channel
+    else:
+        print(f"  {C.DM}Paste a channel URL or @handle (e.g. @MrBeast){C.E}")
+        user_in = input(f"  {C.CN}›{C.E} ").strip()
+        if not user_in:
+            return
 
-    print(f"  {C.CN}⟳  Resolving channel...{C.E}")
-    cid, ctitle = resolve_channel_id(km, user_in)
-    if not cid:
-        print(f"  {C.R}✗  Channel not found.{C.E}")
-        return
+        print(f"  {C.CN}⟳  Resolving channel...{C.E}")
+        cid, ctitle = resolve_channel_id(km, user_in)
+        if not cid:
+            print(f"  {C.R}✗  Channel not found.{C.E}")
+            return
 
     _ui_separator()
     print(f"  {C.DG}│{C.E} {C.G}{C.BO}Channel:{C.E}  {C.W}{ctitle}{C.E}  {C.DM}({cid}){C.E}")
@@ -2344,6 +2490,7 @@ def mode_parse(km: KeyManager):
         _ui_menu_item('2', f'Download shorts', C.Y, f'{len(shorts)} videos')
         _ui_menu_item('3', f'Download long + shorts', C.CN, f'{len(longs) + len(shorts)} videos')
         _ui_menu_item('4', 'Add channel to sync list', C.H, 'download new videos later via Mode 7')
+        _ui_menu_item('5', 'Export to CSV (Excel)', C.G, 'all videos with views, likes, dates')
         _ui_menu_back('0', 'Back to main menu')
         ch = _ui_prompt()
 
@@ -2351,6 +2498,10 @@ def mode_parse(km: KeyManager):
             return
         elif ch == '4':
             _sync_add(km, cid, ctitle)
+        elif ch == '5':
+            kinds = {v['videoId']: {'Type': 'Long'} for v in longs}
+            kinds.update({v['videoId']: {'Type': 'Short'} for v in shorts})
+            export_videos_csv(km, list(kinds), f"{safe_name}_channel", extra=kinds)
         elif ch == '1':
             if not long_urls:
                 print(f"  {C.Y}⚠  No long videos found on this channel.{C.E}")
@@ -2557,6 +2708,258 @@ def mode_sync(km: KeyManager):
             removed = channels.pop(idx)
             _save_channels(channels)
             print(f"  {C.G}✓  Removed {removed['title']}{C.E}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  MODE 8 — NICHE FINDER (find channels + outlier videos for a topic)
+# ═══════════════════════════════════════════════════════════════════════
+# Searches videos for a topic, then rates the channels behind them:
+#   avg views/video, views-per-subscriber, upload activity, channel age;
+# and finds "outliers" — videos with many times the channel's usual views
+# (a strong sign the topic itself works, not just the channel).
+
+_OUTLIER_MIN = 3.0      # a video is an outlier at ≥ 3× the channel's average views
+
+
+def _parse_range(text: str) -> tuple:
+    """'1000-100000' / '-50000' / '10000-' / '' → (min, max); k/m suffixes allowed."""
+    def num(s):
+        s = s.strip().lower().replace(' ', '').replace(',', '')
+        if not s:
+            return None
+        mult = 1000 if s.endswith('k') else 1_000_000 if s.endswith('m') else 1
+        return int(float(s.rstrip('km')) * mult)
+    text = (text or '').strip()
+    if not text:
+        return None, None
+    lo, _, hi = text.partition('-')
+    try:
+        return (num(lo), num(hi)) if '-' in text else (num(lo), None)
+    except ValueError:
+        return None, None
+
+
+def _search_video_ids(km: KeyManager, query: str, limit: int,
+                      published_after: str = None, language: str = None) -> list:
+    """Up to `limit` video IDs for a query (100 quota units per page of 50)."""
+    ids, page_token = [], None
+    # Count pages, not IDs: a page often holds <50 videos, and chasing the
+    # exact number would cost another 100 units for a couple of results.
+    for _ in range(-(-limit // 50)):
+        def req(yt, pt=page_token):
+            params = dict(part="id", q=query, type="video", maxResults=50)
+            if published_after:
+                params['publishedAfter'] = published_after
+            if language:
+                params['relevanceLanguage'] = language
+            if pt:
+                params['pageToken'] = pt
+            return yt.search().list(**params)
+        resp = api_call(km, req)
+        if not resp:
+            break
+        ids += [it['id']['videoId'] for it in resp.get('items', []) if it['id'].get('videoId')]
+        page_token = resp.get('nextPageToken')
+        if not page_token:
+            break
+        print(f"  {C.DM}⟳  {len(ids)} videos found...{C.E}")
+    return list(dict.fromkeys(ids))[:limit]
+
+
+def _channel_activity(km: KeyManager, channel_id: str) -> tuple:
+    """(uploads in the last 30 days, last upload ISO date) — 1 quota unit."""
+    if not channel_id.startswith('UC'):
+        return 0, ''
+    resp = api_call(km, lambda yt: yt.playlistItems().list(
+        part="contentDetails", playlistId='UU' + channel_id[2:], maxResults=50))
+    dates = sorted((it.get('contentDetails', {}).get('videoPublishedAt', '')
+                    for it in (resp or {}).get('items', [])), reverse=True)
+    dates = [d for d in dates if d]
+    month_ago = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return sum(d >= month_ago for d in dates), (dates[0] if dates else '')
+
+
+def _niche_analyze(km: KeyManager, query: str, limit: int, published_after: str,
+                   language: str, subs_range: tuple) -> tuple:
+    """Run the full analysis. Returns (channels: list, videos: list)."""
+    print(f"\n  {C.CN}⟳  Searching videos for {C.W}'{query}'{C.E}{C.CN}...{C.E}")
+    ids = _search_video_ids(km, query, limit, published_after, language)
+    if not ids:
+        return [], []
+    print(f"  {C.CN}⟳  Loading statistics for {len(ids)} videos...{C.E}")
+    vids = fetch_video_details(km, ids)
+    by_channel = {}
+    for v in vids.values():
+        by_channel.setdefault(v['channelId'], []).append(v)
+    print(f"  {C.CN}⟳  Loading {len(by_channel)} channels...{C.E}")
+    chans = fetch_channel_details(km, list(by_channel))
+
+    lo, hi = subs_range
+    channels = []
+    for cid, ch in chans.items():
+        subs = ch['subs']
+        if lo is not None and (subs is None or subs < lo):
+            continue
+        if hi is not None and (subs is None or subs > hi):
+            continue
+        avg = ch['views'] / ch['videos'] if ch['videos'] else 0
+        found = by_channel.get(cid, [])
+        channels.append(dict(
+            ch,
+            avg_views=avg,
+            views_per_sub=(avg / subs) if subs else None,
+            found=len(found),
+            best_views=max((v['views'] for v in found), default=0),
+            age_years=_days_since(ch['created']) / 365.25,
+            uploads_30d=None, last_upload='',
+        ))
+
+    print(f"  {C.CN}⟳  Checking upload activity of {len(channels)} channels...{C.E}")
+    for n, c in enumerate(channels, 1):
+        c['uploads_30d'], c['last_upload'] = _channel_activity(km, c['id'])
+        if n % 10 == 0:
+            print(f"  {C.DM}   {n}/{len(channels)}{C.E}")
+
+    kept = {c['id']: c for c in channels}
+    videos = []
+    for v in vids.values():
+        c = kept.get(v['channelId'])
+        if not c:
+            continue
+        videos.append(dict(v, channel_subs=c['subs'],
+                           outlier=(v['views'] / c['avg_views']) if c['avg_views'] else 0,
+                           views_per_day=v['views'] / _days_since(v['publishedAt'])))
+    return channels, videos
+
+
+_NICHE_SORTS = {
+    '1': ('avg_views',     'avg views per video'),
+    '2': ('views_per_sub', 'views per subscriber (small but strong)'),
+    '3': ('subs',          'subscribers'),
+    '4': ('uploads_30d',   'uploads in the last 30 days'),
+    '5': ('found',         'videos found for this topic'),
+}
+
+
+def _print_niche_channels(channels: list, sort_key: str, top: int = 25):
+    ranked = sorted(channels, key=lambda c: c.get(sort_key) or 0, reverse=True)[:top]
+    print(f"\n  {C.DM}{'#':>3}  {'Channel':<28} {'Subs':>7} {'Avg views':>9} {'V/Sub':>6} "
+          f"{'30d':>4} {'Age':>5} {'Found':>5}{C.E}")
+    _ui_separator()
+    for n, c in enumerate(ranked, 1):
+        vps = f"{c['views_per_sub']:.2f}" if c['views_per_sub'] is not None else '—'
+        print(f"  {C.DM}{n:>3}{C.E}  {C.W}{c['title'][:28]:<28}{C.E} {_fmt_num(c['subs']):>7} "
+              f"{C.G}{_fmt_num(c['avg_views']):>9}{C.E} {vps:>6} {c['uploads_30d']:>4} "
+              f"{c['age_years']:>4.1f}y {c['found']:>5}")
+    return ranked
+
+
+def _print_outliers(videos: list, top: int = 20):
+    outs = sorted((v for v in videos if v['outlier'] >= _OUTLIER_MIN),
+                  key=lambda v: v['outlier'], reverse=True)[:top]
+    if not outs:
+        print(f"  {C.Y}No videos with ≥{_OUTLIER_MIN:.0f}× the channel's average views.{C.E}")
+        return
+    _ui_header(f'Outlier videos (≥{_OUTLIER_MIN:.0f}× channel average)', C.G)
+    for v in outs:
+        print(f"  {C.G}{C.BO}{v['outlier']:>5.1f}×{C.E}  {C.W}{v['title'][:60]}{C.E}")
+        print(f"         {C.DM}{_fmt_num(v['views'])} views · {v['channelTitle'][:30]} "
+              f"({_fmt_num(v['channel_subs'])} subs) · {v['publishedAt'][:10]}{C.E}")
+        print(f"         {C.B}https://www.youtube.com/watch?v={v['id']}{C.E}")
+
+
+def _niche_export(channels: list, videos: list, query: str):
+    ch_rows = [{
+        'Channel': c['title'],
+        'URL': f"https://www.youtube.com/channel/{c['id']}",
+        'Handle': c['handle'],
+        'Country': c['country'],
+        'Subscribers': c['subs'] if c['subs'] is not None else '',
+        'Total views': c['views'],
+        'Videos': c['videos'],
+        'Avg views per video': round(c['avg_views']),
+        'Views per subscriber': round(c['views_per_sub'], 3) if c['views_per_sub'] is not None else '',
+        'Uploads last 30 days': c['uploads_30d'],
+        'Last upload': c['last_upload'][:10],
+        'Created': c['created'][:10],
+        'Age (years)': round(c['age_years'], 1),
+        'Videos found for topic': c['found'],
+        'Best found video views': c['best_views'],
+    } for c in sorted(channels, key=lambda c: c['avg_views'], reverse=True)]
+    export_csv(ch_rows, f"niche_{query}_channels")
+
+    details = {v['id']: v for v in sorted(videos, key=lambda v: v['outlier'], reverse=True)}
+    extra = {v['id']: {'Outlier (× channel avg)': round(v['outlier'], 2)} for v in videos}
+    chans = {c['id']: c for c in channels}
+    export_csv(_video_rows(details, chans, extra), f"niche_{query}_videos")
+
+
+def mode_niche(km: KeyManager):
+    """Mode 8 — find and rate channels for a topic."""
+    _ui_header('Niche Finder', C.H)
+    print(f"  {C.DM}Finds channels for a topic and rates them; spots videos that beat their channel's average.{C.E}")
+    query = input(f"\n  {C.BO}Topic / keywords:{C.E} ").strip()
+    if not query:
+        return
+
+    print(f"\n  {C.B}{C.BO}Videos to analyse:{C.E}")
+    sizes = {'1': 50, '2': 150, '3': 250, '4': 500}
+    for k, n in sizes.items():
+        # search 100 units / 50 videos + up to 1 unit per channel for activity
+        _ui_menu_item(k, f'{n} videos', C.CN, f'~{n * 2}–{n * 3} quota units'
+                      + ('  (default)' if k == '2' else ''))
+    limit = sizes.get(_ui_prompt(), 150)
+
+    print(f"\n  {C.B}{C.BO}Uploaded:{C.E} {C.W}1{C.E} any  {C.W}2{C.E} month  "
+          f"{C.W}3{C.E} 3 months  {C.W}4{C.E} year {C.DM}(Enter = any){C.E}")
+    days = {'2': 30, '3': 90, '4': 365}.get(_ui_prompt())
+    published_after = ((datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                       if days else None)
+    language = input(f"  {C.B}{C.BO}Language{C.E} {C.DM}(ru/en/... Enter = any){C.E}: ").strip() or None
+    subs_range = _parse_range(input(
+        f"  {C.B}{C.BO}Subscribers{C.E} {C.DM}(e.g. 1k-100k, -50k, 10k-; Enter = any){C.E}: "))
+
+    channels, videos = _niche_analyze(km, query, limit, published_after, language, subs_range)
+    if not channels:
+        print(f"  {C.Y}⚠  No channels found (check filters / API quota).{C.E}")
+        return
+    print(f"  {C.G}✓  {len(channels)} channel(s), {len(videos)} video(s) analysed{C.E}")
+    print(f"  {C.DM}Avg views = channel views ÷ videos · V/Sub = avg views ÷ subscribers · "
+          f"30d = uploads in last 30 days{C.E}")
+
+    sort_key = 'avg_views'
+    ranked = _print_niche_channels(channels, sort_key)
+    while True:
+        _ui_header(f'Niche: {query}', C.H)
+        _ui_menu_item('1', 'Sort channels', C.CN, f'now: {dict(_NICHE_SORTS.values())[sort_key]}')
+        _ui_menu_item('2', 'Outlier videos', C.G, 'videos far above their channel average')
+        _ui_menu_item('3', 'Export to CSV (Excel)', C.G, 'channels + videos')
+        _ui_menu_item('4', 'Add channel to sync list', C.H, 'by number from the table')
+        _ui_menu_item('5', 'Parse channel', C.CN, 'by number — full video list (Mode 3)')
+        _ui_menu_back('0', 'Back to main menu')
+        ch = _ui_prompt()
+        if ch == '0':
+            return
+        elif ch == '1':
+            for k, (_, label) in _NICHE_SORTS.items():
+                _ui_menu_item(k, label.capitalize(), C.CN)
+            sort_key = _NICHE_SORTS.get(_ui_prompt(), (sort_key, ''))[0]
+            ranked = _print_niche_channels(channels, sort_key)
+        elif ch == '2':
+            _print_outliers(videos)
+        elif ch == '3':
+            _niche_export(channels, videos, query)
+        elif ch in ('4', '5'):
+            print(f"  {C.DM}Channel number from the table:{C.E}")
+            try:
+                c = ranked[int(_ui_prompt()) - 1]
+            except (ValueError, IndexError):
+                print(f"  {C.Y}⚠  Invalid number.{C.E}")
+                continue
+            if ch == '4':
+                _sync_add(km, c['id'], c['title'])
+            else:
+                mode_parse(km, channel=(c['id'], c['title']))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2852,11 +3255,15 @@ def mode_playlist(km):
         _ui_menu_item('1', 'Download videos', C.G, 'MP4 | MP3 — quality + cookies')
         _ui_menu_item('2', 'Download thumbnails', C.CN,
                       f'→ thumbnails/{thumb_subdir}/')
+        _ui_menu_item('3', 'Export to CSV (Excel)', C.G, 'views, likes, dates')
         _ui_menu_back('0', 'Back to main menu')
         ch = _ui_prompt()
 
         if ch == '0':
             return
+
+        elif ch == '3':
+            export_videos_csv(km, [v['videoId'] for v in videos], f"{thumb_subdir}_playlist")
 
         elif ch == '1':
             _download_urls(urls, DOWNLOADS_DIR)
@@ -2896,6 +3303,7 @@ def main():
         _ui_menu_item('5', 'Download thumbnails', C.B)
         _ui_menu_item('6', 'Playlist Parser', C.H)
         _ui_menu_item('7', 'Sync channels', C.G)
+        _ui_menu_item('8', 'Niche finder', C.H)
         _ui_separator()
         _ui_menu_back('0', 'Exit')
 
@@ -2912,6 +3320,7 @@ def main():
             '5': lambda: mode_thumbnails(km),
             '6': lambda: mode_playlist(km),
             '7': lambda: mode_sync(km),
+            '8': lambda: mode_niche(km),
         }
         if choice == '0':
             break

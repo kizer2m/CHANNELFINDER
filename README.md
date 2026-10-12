@@ -1,4 +1,4 @@
-# YouTube Channel Finder v4.8.0
+# YouTube Channel Finder v4.9.0
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -33,10 +33,12 @@ Search and parsing use the official **YouTube Data API v3**; downloads use **yt-
 | **5 · Thumbnails** | Max-resolution thumbnails for one video or a whole channel |
 | **6 · Playlist parser** | Lists every video of a playlist; bulk download of videos or thumbnails |
 | **7 · Sync channels** | Follows your favourite channels and downloads only the videos you don't have yet |
+| **8 · Niche finder** | Finds the channels behind a topic, rates them and spots videos that far outperform their channel |
 
 Also:
 
 - **Quality choice**: 1080p, 720p, 480p, MP3 audio, or 4K/8K when the video has it
+- **Export to CSV / Excel** from search, channel, playlist and niche results
 - **Never downloads the same video twice** — every download is remembered
 - **Ctrl+C stops safely** — the batch summary is shown and the rest can be resumed later
 - **Metadata** saved next to each video (title, channel, views, likes, tags, description)
@@ -96,7 +98,7 @@ Enter a query, then set the filters (press Enter to skip any of them):
 
 All matching results are loaded, then shown page by page: **Space** for the next page, **Esc** to stop. Each result shows the channel's subscribers, total views and video count.
 
-After the search you can save all links to `find.txt`, download the videos or thumbnails, or open detailed channel analytics.
+After the search you can save all links to `find.txt`, download the videos or thumbnails, open channel analytics, or **export everything to CSV** (views, likes, comments, duration, views per day, channel subscribers).
 
 > Each search page costs 100 API quota units, so a large search can use a noticeable share of the daily 10,000.
 
@@ -114,7 +116,7 @@ Accepts a channel URL, an `@handle` (any language, e.g. `@ОльгаКиселё
 
 Links are copied into `videolinks.txt` before downloading. If the download is interrupted, finish it later with **mode 4**.
 
-Choose **Add channel to sync list** to keep getting the channel's new videos via **mode 7**.
+Choose **Add channel to sync list** to keep getting the channel's new videos via **mode 7**, or **Export to CSV** for a spreadsheet of all its videos (with a Long/Short column).
 
 ### 4 · Batch download
 
@@ -126,7 +128,7 @@ Downloads the highest-resolution thumbnail (falls back to HQ when no max-res ver
 
 ### 6 · Playlist parser
 
-Accepts a playlist URL (`...?list=PL...`) or a bare playlist ID. Skips deleted and private videos, saves the list to `parsed/<Playlist>_playlist.txt`, and offers to download the videos or thumbnails.
+Accepts a playlist URL (`...?list=PL...`) or a bare playlist ID. Skips deleted and private videos, saves the list to `parsed/<Playlist>_playlist.txt`, and offers to download the videos or thumbnails or to export them to CSV.
 
 ### 7 · Sync channels
 
@@ -136,6 +138,36 @@ Keep a list of channels and download only what is new since the last check.
 2. Whenever you like, choose **Check & download new videos**. New videos of all channels are found, queued in `videolinks.txt` and downloaded.
 
 A check costs about 1 API quota unit per channel. The list is stored in `channels.json`.
+
+### 8 · Niche finder
+
+Answers *"who makes videos on this topic, and what works?"*
+
+1. Enter a topic, e.g. `sourdough bread`.
+2. Choose how many videos to analyse (50–500), the upload period, language and an optional subscriber range — e.g. `1k-100k` to look only at small channels.
+3. You get a table of the channels behind those videos:
+
+| Column | Meaning |
+|--------|---------|
+| Subs | subscribers |
+| Avg views | the channel's total views ÷ number of videos |
+| V/Sub | avg views ÷ subscribers — above 1 means videos reach far beyond the subscriber base |
+| 30d | videos uploaded in the last 30 days (is the channel active?) |
+| Age | how long the channel has existed |
+| Found | how many of the found videos belong to it |
+
+Then you can:
+
+- **Sort** by avg views, views per subscriber (*small but strong* channels), subscribers, activity or matches
+- **Outlier videos** — videos with at least **3×** their channel's average views. If a small channel's video took off, the topic itself is in demand
+- **Export to CSV** — two files: channels and videos (with the outlier score)
+- **Add a channel to the sync list** or **parse it** (full video list, mode 3) by its number
+
+The menu shows the quota cost before starting: about 2–3 units per analysed video (150 videos ≈ 300–450 of the daily 10,000).
+
+### Exporting to CSV
+
+Exports are saved to `exports/` as `<name>_<date>.csv`. They use `;` as the separator and UTF-8 with BOM, so a double-click opens them correctly in Excel (including non-English locales and non-Latin titles); Google Sheets and LibreOffice read them as well.
 
 ### Download options
 
@@ -248,6 +280,7 @@ CHANNELFINDER/
 │
 ├── videolinks.txt         links waiting for download (mode 4)
 ├── channels.json          channels followed by mode 7
+├── exports/               CSV exports
 ├── find.txt               links saved from searches
 ├── parsed/                channel and playlist link lists
 ├── downloads/             videos + metadata + list of downloaded videos
@@ -274,7 +307,7 @@ Everything below `requirements.txt` is created by the tool and excluded from git
 
 ## Version
 
-Current version: **v4.8.0**
+Current version: **v4.9.0**
 
 ---
 

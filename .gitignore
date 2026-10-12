@@ -18,6 +18,7 @@ browser_profile/
 pot-provider/
 
 # Folders
+exports/
 downloads/
 parsed/
 thumbnails/
