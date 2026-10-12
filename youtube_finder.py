@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.9.1
+YouTube Channel Finder v4.9.2
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -232,7 +232,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.9.1{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.9.2{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -594,17 +594,20 @@ def check_key_quotas(km: KeyManager):
     for i, api_key in enumerate(km.keys):
         try:
             yt = build('youtube', 'v3', developerKey=api_key)
-            yt.search().list(part="id", q="test", maxResults=1).execute()
+            # channels.list = 1 quota unit (search.list would burn 100 per key on
+            # every launch); an exhausted key fails on any request the same way
+            yt.channels().list(part="id", id="UCBR8-60-B28hp2BmDPdntcQ").execute()
             status = f"{C.G}{C.BO}✓{C.E} {C.G}Active{C.E}"
             if first_valid is None:
                 first_valid = i
         except HttpError as e:
-            if e.resp.status in (403, 429):
+            kind, msg = _api_error_info(e)
+            if kind == 'quota':
                 status = f"{C.R}{C.BO}✗{C.E} {C.R}Quota exhausted{C.E}"
-            elif e.resp.status == 400:
-                status = f"{C.R}{C.BO}✗{C.E} {C.R}Invalid key{C.E}"
+            elif kind == 'key':
+                status = f"{C.R}{C.BO}✗{C.E} {C.R}Invalid key / YouTube API not enabled{C.E}"
             else:
-                status = f"{C.Y}? HTTP {e.resp.status}{C.E}"
+                status = f"{C.Y}? HTTP {e.resp.status}: {msg[:60]}{C.E}"
         except Exception as e:
             status = f"{C.Y}? Error: {e}{C.E}"
         print(f"  {C.DG}│{C.E} Key #{i+1} {C.DM}(...{api_key[-6:]}){C.E}  {status}")
@@ -621,34 +624,70 @@ def check_key_quotas(km: KeyManager):
 #  GENERIC API CALL WITH KEY ROTATION
 # ═══════════════════════════════════════════════════════════════════════
 
+# Error reasons that mean "this key can't be used" → try the next key.
+# Anything else (bad parameter, not found, private…) is a problem with the
+# request itself: switching keys wouldn't help, so it is reported as is.
+# Note: an invalid key comes back as 400 'badRequest' — same status as a bad
+# parameter — and is only recognisable by its message.
+_QUOTA_REASONS = {'quotaExceeded', 'dailyLimitExceeded', 'rateLimitExceeded',
+                  'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED'}
+_KEY_REASONS   = {'keyInvalid', 'keyExpired', 'accessNotConfigured', 'ipRefererBlocked',
+                  'API_KEY_INVALID', 'API_KEY_SERVICE_BLOCKED', 'API_KEY_HTTP_REFERRER_BLOCKED',
+                  'API_KEY_IP_ADDRESS_BLOCKED', 'SERVICE_DISABLED'}
+
+
+def _api_error_info(e: HttpError) -> tuple:
+    """Classify a YouTube API error → (kind, message); kind = 'quota' | 'key' | 'other'."""
+    reasons, msg = set(), ''
+    try:
+        err = json.loads(e.content.decode('utf-8')).get('error', {})
+        msg = re.sub(r'<[^>]+>', '', err.get('message', ''))      # strip <code> tags
+        reasons |= {x.get('reason', '') for x in err.get('errors', [])}
+        reasons |= {d.get('reason', '') for d in err.get('details', []) if isinstance(d, dict)}
+    except Exception:
+        msg = str(e)
+    if reasons & _QUOTA_REASONS or e.resp.status == 429:
+        return 'quota', msg
+    if reasons & _KEY_REASONS or 'api key' in msg.lower():
+        return 'key', msg
+    return 'other', msg or f'HTTP {e.resp.status}'
+
+
 def api_call(km: KeyManager, build_fn, quiet_404: bool = False):
     """
     build_fn(youtube_service) → request object.
-    Automatically rotates keys on 403/429/400 errors.
+    Switches to the next key only when the key itself is the problem
+    (quota exhausted / invalid / API not enabled); other errors are shown as is.
     Returns parsed JSON response or None.
     quiet_404 — return None silently on 404 (e.g. a channel's Shorts playlist
     doesn't exist when the channel has no Shorts).
     """
-    attempts = 0
+    attempts, kinds = 0, set()
     while attempts < len(km.keys):
         try:
             yt = build('youtube', 'v3', developerKey=km.key())
             return build_fn(yt).execute()
         except HttpError as e:
             code = e.resp.status
-            if code in (403, 429, 400):
-                print(f"  {C.R}✗  Key ...{km.key()[-6:]} error {code}. Rotating...{C.E}")
+            kind, msg = _api_error_info(e)
+            if kind in ('quota', 'key'):
+                kinds.add(kind)
+                why = 'quota exhausted' if kind == 'quota' else 'invalid key / API not enabled'
+                print(f"  {C.Y}⚠  Key ...{km.key()[-6:]}: {why}{C.E}")
                 km.rotate()
                 attempts += 1
             elif code == 404 and quiet_404:
                 return None
             else:
-                print(f"  {C.R}✗  HTTP {code}: {e}{C.E}")
+                print(f"  {C.R}✗  YouTube API error {code}: {msg[:150]}{C.E}")
                 return None
         except Exception as e:
             print(f"  {C.R}✗  Error: {e}{C.E}")
             return None
-    print(f"  {C.R}✗  All API keys exhausted.{C.E}")
+    if kinds == {'key'}:
+        print(f"  {C.R}✗  No usable API key — check api_keys.txt (see README → Getting a YouTube API key).{C.E}")
+    else:
+        print(f"  {C.R}✗  All API keys are out of quota — it resets daily at midnight Pacific time.{C.E}")
     return None
 
 
