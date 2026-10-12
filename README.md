@@ -1,252 +1,255 @@
 # YouTube Channel Finder v4.7.0
 
-A powerful **cross-platform** command-line tool for searching YouTube videos, parsing channels, downloading videos, and grabbing thumbnails — all powered by the YouTube Data API v3 with automatic API key rotation. Runs on **Windows, macOS, and Linux** with no platform-specific dependencies.
+![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+A console tool for researching and archiving YouTube content: search videos with filters, list every video of a channel or playlist, and download videos, audio and thumbnails in bulk.
+
+Search and parsing use the official **YouTube Data API v3**; downloads use **yt-dlp** with built-in protection against YouTube's bot detection.
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Avoiding "Sign in to confirm you're not a bot"](#avoiding-sign-in-to-confirm-youre-not-a-bot)
+- [Getting a YouTube API key](#getting-a-youtube-api-key)
+- [Files and folders](#files-and-folders)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Features
 
-### 🔍 Mode 1 — Search Videos
-- Search YouTube by keywords with advanced filters:
-  - **Duration**: any / short (<4 min) / medium (4–20 min) / long (>20 min)
-  - **Quality**: any / SD / HD
-  - **Date range**: last hour / today / week / month / year
-  - **Language**: filter by relevance language code (e.g. `ru`, `en`, `ja`)
-  - **Results per page**: how many results to show at a time (1–50, default 25)
-- **Full search**: fetches ALL available results via API pagination (not limited to 25)
-- **Paginated display**: results shown in batches; press `[Space]` for next page, `[Escape]` to stop
-- Displays total results count and current page progress
-- Displays results with channel analytics (subscribers, total views, video count)
-- **Post-search actions**:
-  - Save ALL video links to `find.txt` (URLs only, one per line)
-  - Re-display results (paginated)
-  - Download max-resolution thumbnails
-  - Download selected videos as MP4 with quality selection
-  - View detailed channel analytics
+| Mode | What it does |
+|------|--------------|
+| **1 · Search videos** | Keyword search with filters (duration, quality, date, language); shows channel stats; save links, download videos or thumbnails |
+| **2 · Single video** | Paste a URL → see views, likes, tags, resolution → download the video or its thumbnail |
+| **3 · Parse channel** | Lists **every** video of a channel, split into long videos and Shorts; bulk download |
+| **4 · Batch download** | Downloads all URLs from `videolinks.txt`; finished links are removed, so an interrupted batch resumes where it stopped |
+| **5 · Thumbnails** | Max-resolution thumbnails for one video or a whole channel |
+| **6 · Playlist parser** | Lists every video of a playlist; bulk download of videos or thumbnails |
 
-### 🔹 Mode 2 — Download Single Video by URL
-- Paste any YouTube video URL and get **instant statistics** before deciding what to do:
-  - Title, channel, upload date, duration
-  - View count, like count, comment count
-  - Resolution, FPS, categories, tags
-- After displaying stats, choose from a sub-menu:
-  1. **Download video** — full quality/cookie/proxy selection (same options as Mode 4)
-     - Downloads video as MP4 (or MP3 for audio) and **saves metadata to a `.txt` file**
-  2. **Download thumbnail** — downloads the max-resolution thumbnail to `thumbnails/`
-- Fetches stats via yt-dlp (no API quota used)
+Also:
 
-### 📋 Mode 3 — Parse Channel
-- Accepts channel URL, `@handle` (including non-Latin handles like `@ОльгаКиселёва`), or free-text search
-- **Handles percent-encoded URLs**: `@%D0%9E%D0%BB%D1%8C%D0%B3%D0%B0...` is decoded automatically
-- Fetches **all** videos from a channel using the **uploads playlist** (`playlistItems` API)
-  - No result cap — works correctly even for channels with **thousands** of videos
-  - Uses only **1 quota unit** per API call (100× cheaper than search)
-- Classifies videos into **Long** (>60s) and **Shorts** (≤60s)
-- Saves results to `parsed/` folder as separate files with links only:
-  - `ChannelName_long.txt`
-  - `ChannelName_shorts.txt`
-- **After parsing, a multi-level download menu appears:**
-  1. **Download long videos** — opens sub-menu:
-     - Download video only (quality/cookies/proxy selection, identical to Mode 4)
-     - Download video + thumbnails (thumbnails saved to `thumbnails/ChannelName_long/`)
-     - Back
-  2. **Download shorts** — same sub-menu for shorts
-  3. **Download long + shorts** — same sub-menu for all videos combined
-  4. **Back to main menu**
-- URLs are **copied to `videolinks.txt`** before download (originals in `_long.txt`/`_shorts.txt` are **never deleted**); already-present URLs are skipped to avoid duplicates
-- Each successfully downloaded URL is **removed from `videolinks.txt`** so interrupted sessions resume cleanly
-- Thumbnails downloaded in **max-resolution** (fallback to HQ), one subfolder per video type
-- Full metadata `.txt` file saved per downloaded video (same as Mode 4)
-
-### ⬇️ Mode 4 — Batch Download
-- Reads video URLs from `videolinks.txt` (one URL per line)
-- **Quality selection** (5 tiers):
-  - `1` — **1080p** (MP4)
-  - `2` — **720p** (MP4)
-  - `3` — **480p** (MP4)
-  - `4` — **Audio only** (MP3, 192 kbps)
-  - `5` — **Ultra High (4K/8K)** — probes the video for available resolutions ≥ 2160p; lets you pick exact height (2160p 4K, 4320p 8K, etc.); shows a "not available" message with skip/exit options if the video has no UHD stream
-- Re-encodes to MP4 automatically via FFmpeg
-- **🍪 Cookie / Authentication support**:
-  - Choose how to handle YouTube authentication before every download:
-    - **No cookies** — PO tokens + browser-like player clients (works for most public videos)
-    - **Fresh cookies from tool browser profile** — exports a signed-in session to `cookies.txt` automatically (see [Cookie Extractor](#-cookie-extractor-extract_cookiescmd))
-    - **Cookies file** — supply a Netscape-format `cookies.txt` file:
-      - Press `[Enter]` to auto-scan the script folder for `cookies.txt` automatically
-      - Or type a custom path to a file or folder — the script auto-detects `cookies.txt`, `www.youtube.com_cookies.txt`, `youtube_cookies.txt`
-      - **Cookie validation**: the tool tests cookies against YouTube before starting any download. If cookies are expired or invalid, an error is shown immediately
-  - If a bot-detection block hits a no-cookie batch, the rest of the batch is retried with fresh cookies from the tool profile
-- **🛡️ Anti-bot pacing**: one extraction per video, random 6–14 s pauses between videos and a 1.5–3 min break every 25 videos; the batch stops at the first block instead of hammering YouTube
-- **Auto-remove completed URLs**: each URL is removed from `videolinks.txt` immediately after a successful download, so interrupted sessions resume cleanly from where they left off
-- **JavaScript challenge solver** — uses Node.js + EJS remote component to decrypt YouTube stream URLs (required since 2025; without it only storyboard thumbnails are available)
-- **CStyle Console download UI**:
-  - Separate progress lines for each stream: `► Video`, `♫ Audio`
-  - Post-processing phases with animated progress: `⊕ Merging`, `⊛ Converting`, `♪ Extracting`
-  - Real-time speed (MB/s) and ETA display
-  - Spinner animation, phase-aware icons, and `✓` checkmark on completion
-- Saves full video metadata to a `.txt` file per video (title, channel, views, likes, tags, description, etc.)
-- Handles duplicate titles by appending `[videoId]` to filenames
-
-### 🖼️ Mode 5 — Download Thumbnails
-- **Single video**: paste a video URL → downloads max-resolution thumbnail
-- **Entire channel**: paste a channel URL or `@handle` → downloads all video thumbnails
-- Thumbnails saved as `Title [videoId].jpg` (max-res with fallback to HQ)
-- All saved to `thumbnails/` folder
-
-### ▶️ Mode 6 — Playlist Parser
-- Paste any YouTube playlist URL (`?list=PL...`) or raw playlist ID
-- Fetches **all accessible videos** in the playlist via `playlistItems` API (1 quota unit/page)
-- Skips deleted and private videos automatically
-- Displays a **preview** of the first 5 videos with position numbers and full count
-- Saves the full URL list to `parsed/<PlaylistName>_playlist.txt` with header metadata
-- **Post-parse action menu:**
-  1. **Download videos** — full quality/cookie selection (same as Mode 4: 1080p/720p/480p/MP3/Ultra HD)
-  2. **Download thumbnails** — saves all thumbnails to `thumbnails/<PlaylistName>/` (max-res with HQ fallback, named `Title [videoId].jpg`)
-  3. **Back to main menu**
-
-### 🔑 API Key Management
-- Keys stored in `api_keys.txt` (one per line)
-- On startup, each key is tested and status displayed:
-  - ✓ Active
-  - ✗ Quota exhausted
-  - ✗ Invalid key
-- Auto-rotation: if a key's quota runs out mid-operation, the script switches to the next available key seamlessly
-- First valid key is selected automatically as the starting key
-
-### 🔄 Auto-Update
-- On every launch updates all dependencies and shows the installed version (or the pip error if an update fails)
-- `yt-dlp` follows the **nightly** channel (recommended by yt-dlp for YouTube — fixes arrive there first), with `[default]` extras
-
-### 🎫 PO Token Provider
-- Uses [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) to generate YouTube *Proof-of-Origin* tokens, the same BotGuard attestation a real browser player sends
-- On first launch the token server is cloned and built into `pot-provider/` (needs Git + Node.js 22+, ~1 min); it is rebuilt automatically when the plugin version changes
-- Started in the background on launch and stopped on exit; while it runs, yt-dlp uses the token-backed `mweb` + `web_safari` clients
-
-### 🗂️ Startup Environment Check
-- Runs automatically after the update check on every launch
-- Verifies all required items exist; **creates anything missing** and reports it:
-  - `thumbnails/`, `downloads/`, `parsed/` — folders created if absent
-  - `videolinks.txt` — created with a comment template if absent
-  - `find.txt` — created empty if absent
-  - `api_keys.txt` — if missing, creates a commented template **and shows a warning** to add real keys
-- **Silent on clean installs**: if everything already exists, no output is shown
-- Each created item shown as `Created` (yellow); already-present items shown as `OK` (green) only when the block appears
+- **Quality choice**: 1080p, 720p, 480p, MP3 audio, or 4K/8K when the video has it
+- **Metadata** saved next to each video (title, channel, views, likes, tags, description)
+- **Several API keys** with automatic switching when one runs out of quota
+- **Anti-bot protection**: PO tokens, human-like pauses, fresh login cookies on demand ([details](#avoiding-sign-in-to-confirm-youre-not-a-bot))
+- **Self-updating**: dependencies and yt-dlp are updated on every launch
 
 ---
 
-## Installation
+## Quick start
 
-### Prerequisites
+### 1. Install the requirements
 
-- **Python 3.8+** — [python.org](https://www.python.org/downloads/)
-- **FFmpeg** — required for video merging and MP4 conversion
-  - Download from [ffmpeg.org](https://ffmpeg.org/download.html)
-  - Add to system PATH
-- **Node.js 22+** — **required** for YouTube JS challenge solving and the PO Token server
-  - Download from [nodejs.org](https://nodejs.org/)
-  - Add to system PATH
-- **Git** — used once to fetch the PO Token server ([git-scm.com](https://git-scm.com/))
-- **Google Chrome or Microsoft Edge** — used by the Cookie Extractor (optional)
+| Program | Why | Download |
+|---------|-----|----------|
+| Python 3.8+ | runs the tool | [python.org](https://www.python.org/downloads/) |
+| FFmpeg | merges video + audio, converts to MP4/MP3 | [ffmpeg.org](https://ffmpeg.org/download.html) |
+| Node.js 22+ | solves YouTube's JavaScript challenge, runs the token server | [nodejs.org](https://nodejs.org/) |
+| Git | fetches the token server once on first launch | [git-scm.com](https://git-scm.com/) |
+| Chrome or Edge | *optional* — only for the [Cookie Extractor](#cookie-extractor) | — |
 
-### Setup
+FFmpeg, Node.js and Git must be available in `PATH` (check with `ffmpeg -version`, `node -v`, `git --version`).
 
-1. **Clone or download** the project folder
+### 2. Get the code and Python packages
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   This installs:
-   - `google-api-python-client` — YouTube Data API
-   - `yt-dlp[default]` — video downloading
-   - `bgutil-ytdlp-pot-provider` — PO Token plugin for yt-dlp
-   - `websocket-client` — used by the Cookie Extractor
-
-3. **Add your API keys** to `api_keys.txt` (one key per line):
-   ```
-   AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-   AIzaSyYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
-   ```
-
-4. **Run the script**:
-   ```bash
-   python youtube_finder.py
-   ```
-   Or use the launcher:
-   ```bash
-   run_search.cmd
-   ```
-
----
-
-## Fixing "Sign in to confirm you're not a bot"
-
-YouTube limits anonymous sessions to roughly **300 videos / hour**. The tool stays under that by itself (PO tokens, one request per video, random pauses). If a block still happens:
-
-1. **Wait 30–60 minutes** — guest blocks are temporary. Unfinished URLs stay in `videolinks.txt`; resume with Mode 4.
-2. **Use a signed-in session** — accounts get a much higher limit (~2000 videos / hour). Pick **2 (Fresh cookies from tool browser profile)** in the cookie menu. A secondary Google account is recommended.
-
-> ℹ️ VPNs / Cloudflare WARP don't help: shared IPs are flagged by Google *more*, not less.
-
-### 🍪 Cookie Extractor (`extract_cookies.cmd`)
-
-Chrome 127+ and Edge encrypt cookies with *App-Bound Encryption* — nothing outside the browser (including yt-dlp's `--cookies-from-browser`) can read them. The extractor solves this by letting the browser itself hand the cookies over:
-
-- It keeps a **separate browser profile** in `browser_profile/` — your main Chrome is never touched and may stay open
-- **First run:** a normal Chrome/Edge window opens — sign in to YouTube, then **close the window**
-- **After that:** the profile is opened invisibly, youtube.com is loaded (refreshing the session), the cookies are written to `cookies.txt` and the browser closes (~10 s)
-- Because only the tool opens this profile, YouTube does not rotate the exported session — no more "cookies expired after a few hours"
-
-Run it standalone:
 ```bash
-extract_cookies.cmd              # menu: refresh / sign in / import from Firefox
-python cookie_extractor.py --refresh   # non-interactive refresh (exit code 0 = ok)
+git clone https://github.com/kizer2m/CHANNELFINDER.git
+cd CHANNELFINDER
+pip install -r requirements.txt
 ```
-or pick **2** in the cookie menu of any download — the same refresh runs automatically.
 
-> 🔒 `cookies.txt` and `browser_profile/` contain your login session — they are gitignored; never share them.
+### 3. Add an API key
 
-### Manual alternative — cookies.txt from an extension
+Create `api_keys.txt` in the project folder and put your key(s) there, one per line ([how to get a key](#getting-a-youtube-api-key)). If the file is missing, the tool creates a template on first launch.
 
-Export cookies with the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) extension while on youtube.com, put the file in the script folder and pick **3** in the cookie menu. Cookies exported from your everyday browser expire within hours because the browser keeps rotating the session.
+### 4. Run
 
----
+| Windows | macOS / Linux |
+|---------|---------------|
+| double-click `run_search.cmd` | `python3 youtube_finder.py` |
 
-## How to Get a YouTube Data API Key
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select an existing one)
-3. Navigate to **APIs & Services** → **Library**
-4. Search for **YouTube Data API v3** and click **Enable**
-5. Go to **APIs & Services** → **Credentials**
-6. Click **+ CREATE CREDENTIALS** → **API key**
-7. Copy the generated key
-8. *(Optional)* Click **Edit API key** to restrict it to YouTube Data API v3 only
-9. Paste the key into `api_keys.txt`
-
-> **Tip:** Each API key has a daily quota of **10,000 units**. A single search costs ~100 units, while channel parsing uses only ~1 unit per page (50 videos). Add multiple keys to extend your daily capacity — the script rotates through them automatically.
+On launch the tool updates its dependencies, starts the token server (the very first launch builds it, ~1 min), checks your API keys and opens the main menu.
 
 ---
 
-## Project Structure
+## Usage
+
+### 1 · Search videos
+
+Enter a query, then set the filters (press Enter to skip any of them):
+
+- **Duration**: under 4 min / 4–20 min / over 20 min
+- **Quality**: SD / HD
+- **Uploaded**: last hour / today / week / month / year
+- **Language**: e.g. `en`, `ru`, `ja`
+- **Results per page**: 1–50 (default 25)
+
+All matching results are loaded, then shown page by page: **Space** for the next page, **Esc** to stop. Each result shows the channel's subscribers, total views and video count.
+
+After the search you can save all links to `find.txt`, download the videos or thumbnails, or open detailed channel analytics.
+
+> Each search page costs 100 API quota units, so a large search can use a noticeable share of the daily 10,000.
+
+### 2 · Single video by URL
+
+Shows the video's statistics (no API quota used), then offers to download the video or its thumbnail.
+
+### 3 · Parse channel
+
+Accepts a channel URL, an `@handle` (any language, e.g. `@ОльгаКиселёва`) or just the channel name.
+
+- Lists **all** videos, even on channels with thousands of uploads, at about 1 quota unit per 50 videos
+- Saves the links to `parsed/<Channel>_long.txt` and `parsed/<Channel>_shorts.txt`
+- Then lets you download long videos, Shorts or both, optionally together with thumbnails
+
+Links are copied into `videolinks.txt` before downloading. If the download is interrupted, finish it later with **mode 4**.
+
+### 4 · Batch download
+
+Put video URLs into `videolinks.txt`, one per line (lines starting with `#` are ignored), and choose mode 4. Each downloaded link is removed from the file right away.
+
+### 5 · Thumbnails
+
+Downloads the highest-resolution thumbnail (falls back to HQ when no max-res version exists) for a single video or for every video of a channel. Files are named `Title [videoId].jpg`.
+
+### 6 · Playlist parser
+
+Accepts a playlist URL (`...?list=PL...`) or a bare playlist ID. Skips deleted and private videos, saves the list to `parsed/<Playlist>_playlist.txt`, and offers to download the videos or thumbnails.
+
+### Download options
+
+Every download asks two questions.
+
+**Quality**
+
+| Option | Result |
+|--------|--------|
+| 1080p / 720p / 480p | MP4 (best available up to that height) |
+| Audio only | MP3, 192 kbps |
+| Ultra High | checks the video for 4K/8K and lets you pick the exact resolution |
+
+**Cookies**
+
+| Option | When to use |
+|--------|-------------|
+| 1 · No cookies | default; works for most public videos |
+| 2 · Fresh cookies from tool browser profile | when YouTube starts blocking; uses your signed-in session ([Cookie Extractor](#cookie-extractor)) |
+| 3 · Cookies from a .txt file | if you already have a `cookies.txt` exported some other way |
+
+Videos are saved to `downloads/` as `Title [videoId].mp4` together with a `.txt` file of metadata.
+
+---
+
+## Avoiding "Sign in to confirm you're not a bot"
+
+YouTube limits how many videos one IP address can request: roughly **300 videos per hour** without an account and about **2,000 per hour** with a signed-in account. Past that, it answers *"Sign in to confirm you're not a bot"*.
+
+### What the tool does automatically
+
+- **PO tokens.** A small local server ([bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)) generates the same proof-of-origin tokens a real browser player sends. It is built on the first launch, started in the background on every launch and stopped on exit.
+- **One request per video.** Each video's info is fetched once and reused for the download and the metadata file.
+- **Human-like pacing.** A random 6–14 s pause between videos, plus a 1.5–3 min break after every 25 videos.
+- **Stops on the first block.** Further requests would only make the block longer. Unfinished links stay in `videolinks.txt`.
+- **Retries with your login.** If a batch without cookies gets blocked, the rest of it is retried with fresh cookies from the tool's browser profile.
+- **Up-to-date yt-dlp.** yt-dlp is updated to the latest *nightly* build on every launch; fixes for YouTube changes appear there first.
+
+### If you are blocked anyway
+
+1. **Wait 30–60 minutes.** Blocks without an account are temporary. Then continue with **mode 4**.
+2. **Use a signed-in session.** Choose cookie option **2**. A secondary Google account is recommended, so your main account is never at risk.
+
+> VPNs and Cloudflare WARP don't help: shared IP addresses are treated with *more* suspicion by Google, not less.
+
+### Cookie Extractor
+
+`extract_cookies.cmd` (or `python3 cookie_extractor.py`) saves your YouTube login to `cookies.txt`.
+
+Chrome 127+ and Edge encrypt their cookies so that no other program can read them, which is why "import cookies from browser" usually fails. The extractor works around this:
+
+1. It uses its **own browser profile** in `browser_profile/`. Your normal browser is never touched and can stay open.
+2. **First run:** a regular Chrome/Edge window opens. Sign in to YouTube, then **close the window**.
+3. **Every later run:** the profile is opened invisibly, youtube.com is loaded, the cookies are written to `cookies.txt` and the browser closes (about 10 seconds).
+
+Since nothing else ever opens this profile, YouTube doesn't invalidate the saved session, unlike cookies exported from a browser you use every day, which stop working within hours.
+
+```bash
+extract_cookies.cmd                    # menu: refresh / sign in / import from Firefox
+python3 cookie_extractor.py --refresh  # refresh without questions (exit code 0 = success)
+```
+
+You rarely need to run it by hand: cookie option **2** in any download does the same automatically.
+
+> ⚠️ `cookies.txt` and `browser_profile/` contain your logged-in session. They are excluded from git — never share or upload them.
+
+---
+
+## Getting a YouTube API key
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and create a project.
+2. Go to **APIs & Services → Library**, find **YouTube Data API v3** and click **Enable**.
+3. Go to **APIs & Services → Credentials → Create credentials → API key**.
+4. **Restrict the key:** open it, set *API restrictions* to **YouTube Data API v3** and save. A restricted key is useless for anything else if it ever leaks.
+5. Paste the key into `api_keys.txt`.
+
+Each key has **10,000 quota units per day**:
+
+| Action | Cost |
+|--------|------|
+| Search (one page of up to 50 results) | 100 units |
+| Channel / playlist listing | 1 unit per 50 videos |
+| Channel stats | 1 unit |
+| Downloads, video info, thumbnails | free (no API used) |
+
+Add several keys (one per line) to raise the daily limit. At startup every key is tested, and the tool switches to the next one automatically when a key runs out.
+
+> 🔒 Never commit `api_keys.txt` — it is already in `.gitignore`. If a key was ever published, delete it in the Cloud Console and create a new one.
+
+---
+
+## Files and folders
 
 ```
 CHANNELFINDER/
-├── youtube_finder.py    # Main script
-├── api_keys.txt         # API keys (one per line)
-├── requirements.txt     # Python dependencies
-├── run_search.cmd       # Windows launcher
-├── cookie_extractor.py  # Cookie Extractor (fresh cookies.txt from a dedicated browser profile)
-├── extract_cookies.cmd  # Cookie Extractor launcher
-├── cookies.txt          # Exported cookies (gitignored)
-├── browser_profile/     # Dedicated browser profile for cookies (gitignored)
-├── pot-provider/        # PO Token server, built on first launch (gitignored)
-├── videolinks.txt       # URLs for batch download (Mode 3)
-├── find.txt             # Saved search results (links)
-├── thumbnails/          # Downloaded thumbnails
-├── downloads/           # Downloaded videos + metadata
-└── parsed/              # Channel parse results
+├── youtube_finder.py      main program
+├── cookie_extractor.py    Cookie Extractor
+├── run_search.cmd         Windows launcher
+├── extract_cookies.cmd    Cookie Extractor launcher (Windows)
+├── requirements.txt       Python packages
+│
+├── api_keys.txt           🔒 your API keys
+├── cookies.txt            🔒 exported YouTube cookies
+├── browser_profile/       🔒 Cookie Extractor's browser profile
+├── pot-provider/          token server (built automatically)
+│
+├── videolinks.txt         links waiting for download (mode 4)
+├── find.txt               links saved from searches
+├── parsed/                channel and playlist link lists
+├── downloads/             videos + metadata
+└── thumbnails/            thumbnails
 ```
+
+Everything below `requirements.txt` is created by the tool and excluded from git. 🔒 marks private files.
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| *Sign in to confirm you're not a bot* | Wait 30–60 min, or use cookie option 2 — see [above](#avoiding-sign-in-to-confirm-youre-not-a-bot) |
+| *PO Token server build failed* | Install Git and Node.js 22+, make sure they are in `PATH`, restart the tool |
+| *PO Token server vX running, plugin is vY* | An old server is still running: end the `node.exe` process (Task Manager) and restart the tool |
+| Only very low quality or no formats | Check `node -v` (22+ needed); the first download also needs internet access to fetch the challenge solver |
+| *Cookie validation failed* | Run `extract_cookies.cmd` → **2** and sign in again |
+| *Quota exhausted* on all keys | Quota resets daily (midnight Pacific time); add more keys to `api_keys.txt` |
+| Video downloaded without sound / not MP4 | FFmpeg is missing — install it and add it to `PATH` |
 
 ---
 
@@ -254,12 +257,10 @@ CHANNELFINDER/
 
 Current version: **v4.7.0**
 
-> Detailed change history is maintained in `GEMINI.md` and `CLAUDE.md` (AI session context files, not tracked in git).
-
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
 
-> ⚠️ This tool interacts with YouTube. Please respect [YouTube's Terms of Service](https://www.youtube.com/t/terms) when using it.
+> This tool interacts with YouTube. Please respect the [YouTube Terms of Service](https://www.youtube.com/t/terms) and the rights of content creators — download only what you are allowed to.
