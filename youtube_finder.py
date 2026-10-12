@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTube Channel Finder v4.6.3
+YouTube Channel Finder v4.6.4
   Mode 1 — Search videos (filters, thumbnails, channel stats, download)
   Mode 2 — Download single video by URL (stats + download/thumbnail)
   Mode 3 — Parse channel (long / shorts) + download menu (long/shorts/both + thumbnails)
@@ -41,6 +41,7 @@ else:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 import time
+import random
 import threading
 from datetime import datetime, timedelta
 
@@ -227,7 +228,7 @@ def _print_cfinder_banner():
 
     # Tagline under the banner
     print(f"\n        {C.DM}{'─' * 44}{C.E}")
-    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.3{C.E}")
+    print(f"         {C.DG}YouTube Channel Finder{C.E}  {C.DM}│{C.E}  {C.W}{C.BO}v4.6.4{C.E}")
     print(f"        {C.DM}{'─' * 44}{C.E}")
     print()
 
@@ -767,19 +768,25 @@ def _pick_quality() -> dict:
 # Extractor args for yt-dlp to bypass YouTube BotGuard/PO-token blocks without cookies.
 # VisionOS and Safari clients do not require web BotGuard challenge attestation
 # and return full streams (including 1080p, 4K UHD).
+# 'web' is intentionally omitted: it only yields SABR formats (not downloadable)
+# and each extra client = one more player request counted by YouTube's rate limiter.
 _YT_EXTRACTOR_ARGS = {
     'youtube': {
-        'player_client': ['visionos', 'web_safari', 'web'],
+        'player_client': ['visionos', 'web_safari'],
     }
 }
 
 
-def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
-    """Return deduplicated descending list of heights >=2160 available for the URL."""
+def _probe_uhd_formats(url: str, cookie_opts: dict) -> tuple:
+    """Return (heights, raw_info): descending heights >=2160 and the unprocessed info dict.
+
+    raw_info is reused by _download_one() so the video is not extracted twice.
+    Bot/rate-limit errors are re-raised so the caller can stop the batch.
+    """
     try:
         from yt_dlp import YoutubeDL
     except ImportError:
-        return []
+        return [], None
     probe_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -793,18 +800,20 @@ def _probe_uhd_formats(url: str, cookie_opts: dict) -> list:
             probe_opts[k] = v
     try:
         with YoutubeDL(probe_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=False, process=False)
         if not info:
-            return []
+            return [], None
         seen, result = set(), []
         for f in info.get('formats', []):
             h = f.get('height') or 0
             if h >= 2160 and h not in seen:
                 seen.add(h)
                 result.append(h)
-        return sorted(result, reverse=True)
-    except Exception:
-        return []
+        return sorted(result, reverse=True), info
+    except Exception as e:
+        if _is_bot_error(str(e)):
+            raise
+        return [], None
 
 
 def _pick_uhd_resolution(available: list) -> str:
@@ -1039,6 +1048,9 @@ _BOT_SIGNALS = [
     '429',
     'too many requests',
     'nsig extraction failed',
+    'try again later',        # "This content isn't available, try again later" = rate limit
+    'rate-limit',
+    'rate limit',
 ]
 
 
@@ -1368,6 +1380,14 @@ def _build_ydl_opts(out_dir: str, quality_opts: dict, cookie_opts: dict) -> dict
         'remote_components': ['ejs:github'],
         # Spoof VisionOS & Safari clients to bypass YouTube BotGuard checks without cookies
         'extractor_args':   _YT_EXTRACTOR_ARGS,
+        # Pace requests inside one extraction (webpage → player → ...) like a browser would
+        'sleep_interval_requests': 1,
+        # Back off exponentially on HTTP/fragment errors instead of hammering YouTube
+        'retry_sleep_functions': {
+            'http':      lambda n: min(2 ** n, 30),
+            'fragment':  lambda n: min(2 ** n, 30),
+            'extractor': lambda n: min(5 * (n + 1), 30),
+        },
     }
     opts.update(quality_opts)
     # Apply cookie options (strip our internal meta keys)
@@ -1395,16 +1415,55 @@ def _remove_url_from_videolinks(url: str):
         print(f"  {C.Y}⚠  Could not update videolinks.txt: {e}{C.E}")
 
 
+# ── Anti-bot pacing ─────────────────────────────────────────────────────
+# YouTube guest sessions are rate-limited to ~300 videos/hour (~1000 player
+# requests/hour). Random human-like pauses + a periodic long break keep long
+# batches well below that limit.
+_PAUSE_MIN, _PAUSE_MAX           = 6.0, 14.0     # seconds between videos
+_LONG_BREAK_EVERY                = 25            # videos
+_LONG_BREAK_MIN, _LONG_BREAK_MAX = 90.0, 180.0   # seconds
+
+
+def _polite_pause(done: int):
+    """Random pause between downloads; a longer break every _LONG_BREAK_EVERY videos."""
+    if done % _LONG_BREAK_EVERY == 0:
+        secs  = random.uniform(_LONG_BREAK_MIN, _LONG_BREAK_MAX)
+        label = 'Long break (staying under YouTube rate limit)'
+    else:
+        secs  = random.uniform(_PAUSE_MIN, _PAUSE_MAX)
+        label = 'Pause'
+    end = time.time() + secs
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            break
+        print(f"\r  {C.DM}⏸  {label}: {left:4.0f}s{C.E}   ", end='', flush=True)
+        time.sleep(min(1.0, left))
+    print('\r' + ' ' * 70 + '\r', end='', flush=True)
+
+
+def _print_bot_block_help(remaining: int, from_videolinks: bool):
+    """Explain a bot/rate-limit block after the batch has been stopped."""
+    print(f"\n  {C.Y}⚠  YouTube flagged this session — batch stopped so the block doesn't get worse.{C.E}")
+    print(f"  {C.DM}   Wait 30–60 min before resuming, or switch cookie mode (browser / cookies.txt).{C.E}")
+    if from_videolinks:
+        print(f"  {C.DM}   {remaining} URL(s) not downloaded remain in videolinks.txt — resume via Mode 4.{C.E}")
+
+
 def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
-                  from_videolinks: bool = False) -> bool:
+                  from_videolinks: bool = False, raw: dict = None) -> bool:
     """Download a single URL. Returns True on success, False on failure.
 
     When from_videolinks=True the URL will be removed from videolinks.txt
     after a successful download.
+    raw — already-extracted (process=False) info dict to reuse; skips extraction.
     """
-    # Use process=False to get title/basic info WITHOUT running format selection.
-    # This avoids format-not-available errors during the info step.
-    raw = ydl.extract_info(url, download=False, process=False)
+    # Extract ONCE per video (process=False = no format selection yet, avoids
+    # format-not-available errors), then reuse this dict for download + metadata.
+    # Every extraction costs several player requests that YouTube counts
+    # towards bot detection, so re-extracting is what triggered blocks.
+    if raw is None:
+        raw = ydl.extract_info(url, download=False, process=False)
     if not raw:
         print(f"  {C.R}✗  Could not fetch info for {url}{C.E}")
         return False
@@ -1415,14 +1474,9 @@ def _download_one(ydl, url: str, i: int, total: int, out_dir: str,
     _ui_separator()
     # Reset phase tracker for this URL (video → audio → merge)
     _dl_phase_reset()
-    # download() runs the full pipeline: format selection + download + post-process
-    ydl.download([url])
-    # For metadata, re-fetch with full processing (no download) to get resolved fields
-    try:
-        info = ydl.extract_info(url, download=False)
-        _save_video_metadata(info or raw, out_dir)
-    except Exception:
-        _save_video_metadata(raw, out_dir)  # use raw info as fallback
+    # Full pipeline on the already-extracted info: format selection + download + post-process
+    info = ydl.process_ie_result(raw, download=True)
+    _save_video_metadata(info or raw, out_dir)
     # Remove from videolinks.txt if this batch came from there
     if from_videolinks:
         _remove_url_from_videolinks(url)
@@ -1488,14 +1542,20 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
     # ── Ultra High (4K/8K) mode — probe + resolve format per URL ────────
     if quality_opts.pop('_quality_mode', None) == 'ultra_high':
         uhd_pp = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
-        failed_urls = []
         try:
             from yt_dlp import YoutubeDL
             for i, url in enumerate(urls, 1):
+                if i > 1:
+                    _polite_pause(i - 1)
                 # Resolve UHD format for this URL
                 while True:
                     print(f"\n{C.CN}[{i}/{len(urls)}] Probing Ultra HD formats...{C.E}")
-                    available = _probe_uhd_formats(url, cookie_opts)
+                    try:
+                        available, probed = _probe_uhd_formats(url, cookie_opts)
+                    except Exception as e:
+                        print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
+                        _print_bot_block_help(len(urls) - i + 1, from_videolinks)
+                        return
                     if not available:
                         print(f"  {C.Y}No 4K/8K formats found for this video.{C.E}")
                         _ui_menu_item('1', 'Skip', C.CN, 'back to previous menu')
@@ -1518,17 +1578,17 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                         with YoutubeDL(url_opts) as ydl:
                             try:
                                 _download_one(ydl, url, i, len(urls), out_dir,
-                                              from_videolinks=from_videolinks)
-                                if i < len(urls):
-                                    time.sleep(1.0)
+                                              from_videolinks=from_videolinks,
+                                              raw=probed)
                             except Exception as e:
                                 err_msg = str(e)
                                 if _is_cookie_db_error(err_msg):
                                     _print_cookie_db_help(browser_name)
                                     return
                                 print(f"\n{C.R}  Error: {err_msg[:200]}{C.E}")
-                                if _is_bot_error(err_msg) and cookie_mode == 'none':
-                                    failed_urls.append(url)
+                                if _is_bot_error(err_msg):
+                                    _print_bot_block_help(len(urls) - i + 1, from_videolinks)
+                                    return
                     except Exception as e:
                         print(f"\n{C.R}  Error: {str(e)[:200]}{C.E}")
                     break  # move to next URL
@@ -1550,8 +1610,6 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                 try:
                     _download_one(ydl, url, i, len(urls), out_dir,
                                   from_videolinks=from_videolinks)
-                    if i < len(urls):
-                        time.sleep(1.0)
                 except Exception as e:
                     err_msg = str(e)
 
@@ -1562,12 +1620,17 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
 
                     print(f"\n  {C.R}✗  Error: {err_msg[:200]}{C.E}")
 
-                    # If it looks like a bot block and we're not already using cookies
-                    if _is_bot_error(err_msg) and cookie_mode == 'none':
-                        print(f"  {C.Y}↳ Bot/auth block detected — will retry with browser cookies.{C.E}")
-                        failed_urls.append(url)
-                    else:
-                        print()
+                    # Bot block: stop right away — every further request deepens the flag
+                    if _is_bot_error(err_msg):
+                        if cookie_mode == 'none':
+                            print(f"  {C.Y}↳ Bot/auth block detected — will retry the rest with browser cookies.{C.E}")
+                            failed_urls = urls[i - 1:]
+                        else:
+                            _print_bot_block_help(len(urls) - i + 1, from_videolinks)
+                        break
+                    print()
+                if i < len(urls):
+                    _polite_pause(i)
     finally:
         _cleanup_tmp_cookie_db(cookie_opts)
 
@@ -1603,6 +1666,11 @@ def _download_urls(urls: list, out_dir: str, from_videolinks: bool = False):
                             _print_cookie_db_help(browser)
                             break
                         print(f"\n  {C.R}✗  Retry failed: {err_msg[:200]}{C.E}\n")
+                        if _is_bot_error(err_msg):
+                            _print_bot_block_help(len(failed_urls) - i + 1, from_videolinks)
+                            break
+                    if i < len(failed_urls):
+                        _polite_pause(i)
         finally:
             _cleanup_tmp_cookie_db(retry_cookie_opts)
 
@@ -1969,7 +2037,7 @@ def _copy_urls_to_videolinks(urls: list):
     print(f"  {C.G}Added {len(new_urls)} URL(s) to videolinks.txt{C.E}")
 
 
-def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
+def _download_thumbnails_for_urls(urls: list, channel_subdir: str, titles: dict = None):
     """
     Download max-res thumbnails for a list of YouTube video URLs.
     Saves to thumbnails/<channel_subdir>/ folder.
@@ -1987,8 +2055,15 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
     except ImportError:
         YoutubeDL = None
 
-    title_cache = {}  # vid → title
-    if YoutubeDL is not None:
+    # vid → title. Titles passed in (from the Data API) cost no YouTube player requests;
+    # only the missing ones are fetched via yt-dlp, with pauses to avoid bot detection.
+    title_cache = dict(titles or {})
+    missing = []
+    for url in urls:
+        m = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
+        if m and m.group(1) not in title_cache:
+            missing.append(url)
+    if YoutubeDL is not None and missing:
         print(f"  {C.CN}Fetching video titles for thumbnails...{C.E}")
         probe_opts = {
             'quiet': True, 'no_warnings': True,
@@ -1996,16 +2071,21 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
             'js_runtimes': {'node': {}},
             'remote_components': ['ejs:github'],
             'extractor_args': _YT_EXTRACTOR_ARGS,
+            'sleep_interval_requests': 1,
         }
         try:
             with YoutubeDL(probe_opts) as ydl:
-                for url in urls:
+                for n, url in enumerate(missing, 1):
                     try:
                         info = ydl.extract_info(url, download=False, process=False)
                         if info:
                             title_cache[info.get('id', '')] = info.get('title', '')
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if _is_bot_error(str(e)):
+                            print(f"  {C.Y}⚠  Rate-limited — remaining thumbnails will be named by video ID.{C.E}")
+                            break
+                    if n < len(missing):
+                        time.sleep(random.uniform(1.5, 3.5))
         except Exception:
             pass
 
@@ -2036,11 +2116,13 @@ def _download_thumbnails_for_urls(urls: list, channel_subdir: str):
     print(f"  {C.G}Thumbnails done: {ok}/{total} → {thumb_dir}{C.E}")
 
 
-def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
+def _parse_download_submenu(urls: list, label: str, channel_subdir: str,
+                            titles: dict = None):
     """
     Inner submenu shown after video-type selection.
     label     — human-readable name, e.g. 'Long videos' or 'Shorts'
     channel_subdir — subfolder name for thumbnails
+    titles    — optional {videoId: title} for thumbnail filenames
     """
     while True:
         _ui_header(f'Download: {label} ({len(urls)} videos)', C.G)
@@ -2067,7 +2149,7 @@ def _parse_download_submenu(urls: list, label: str, channel_subdir: str):
         # If user chose option 2 — also download thumbnails
         if ch == '2':
             print(f"\n  {C.CN}⟳  Downloading thumbnails for {C.W}{label}{C.E}{C.CN}...{C.E}")
-            _download_thumbnails_for_urls(urls, channel_subdir)
+            _download_thumbnails_for_urls(urls, channel_subdir, titles)
 
         return
 
@@ -2116,6 +2198,7 @@ def mode_parse(km: KeyManager):
 
     long_urls  = [f"https://www.youtube.com/watch?v={v['videoId']}" for v in longs]
     short_urls = [f"https://www.youtube.com/watch?v={v['videoId']}" for v in shorts]
+    title_map  = {v['videoId']: v['title'] for v in longs + shorts}
 
     with open(long_path, 'w', encoding='utf-8') as f:
         for u in long_urls:
@@ -2143,18 +2226,18 @@ def mode_parse(km: KeyManager):
             if not long_urls:
                 print(f"  {C.Y}⚠  No long videos found on this channel.{C.E}")
                 continue
-            _parse_download_submenu(long_urls, 'Long videos', f"{safe_name}_long")
+            _parse_download_submenu(long_urls, 'Long videos', f"{safe_name}_long", title_map)
         elif ch == '2':
             if not short_urls:
                 print(f"  {C.Y}⚠  No shorts found on this channel.{C.E}")
                 continue
-            _parse_download_submenu(short_urls, 'Shorts', f"{safe_name}_shorts")
+            _parse_download_submenu(short_urls, 'Shorts', f"{safe_name}_shorts", title_map)
         elif ch == '3':
             all_urls = long_urls + short_urls
             if not all_urls:
                 print(f"  {C.Y}⚠  No videos found on this channel.{C.E}")
                 continue
-            _parse_download_submenu(all_urls, 'Long + Shorts', f"{safe_name}_all")
+            _parse_download_submenu(all_urls, 'Long + Shorts', f"{safe_name}_all", title_map)
         else:
             print(f"  {C.Y}Invalid choice.{C.E}")
 
@@ -2463,7 +2546,8 @@ def mode_playlist(km):
 
         elif ch == '2':
             print(f"\n  {C.CN}⟳  Downloading {len(urls)} thumbnail(s)...{C.E}")
-            _download_thumbnails_for_urls(urls, thumb_subdir)
+            _download_thumbnails_for_urls(
+                urls, thumb_subdir, {v['videoId']: v['title'] for v in videos})
 
         else:
             print(f"  {C.Y}⚠  Invalid choice.{C.E}")
